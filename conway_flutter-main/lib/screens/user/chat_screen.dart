@@ -36,6 +36,12 @@ class _ChatScreenState extends State<ChatScreen> {
   User? _currentUser;
   StreamSubscription? _messageSubscription;
 
+  // --- New State Variables ---
+  bool _isBurnoutMode = false;
+  DateTime? _scheduledTime;
+  Duration? _burnoutDuration;
+  // --- End New State Variables ---
+
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       Future.delayed(const Duration(milliseconds: 100), () {
@@ -181,10 +187,20 @@ class _ChatScreenState extends State<ChatScreen> {
     
     _messageController.clear();
 
-    // REMOVE encryption call
-    // final encryptedMessage = CryptoHelper.encryptText(messageText);
-    final plainMessageText = messageText; // Use plain text directly
-    
+    // Read the current modes
+    final bool isBurnout = _isBurnoutMode;
+    final Duration? burnoutDur = _burnoutDuration;
+    final DateTime? schedule = _scheduledTime;
+
+    // Reset modes after getting the message text
+    setState(() {
+      _isBurnoutMode = false;
+      _scheduledTime = null;
+      _burnoutDuration = null;
+    });
+
+    final plainMessageText = messageText;
+
     // Optimistically add plain text message to UI
     final optimisticMessage = {
       'senderId': _currentUser!.id.toString(),
@@ -201,12 +217,14 @@ class _ChatScreenState extends State<ChatScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
     
-    // Send plain text message via SocketService
+    // Send plain text message via SocketService (will need modification later)
+    print("[ChatScreen SEND] Mode - Burnout: $isBurnout ($burnoutDur), Scheduled: $schedule"); // Updated log
     _socketService.sendMessage(
       _currentUser!.id.toString(),
       _currentUser!.email,
       widget.userEmail,
-      plainMessageText, // Send plain text
+      plainMessageText, // Send plain text for now
+      // TODO: Pass isBurnout, burnoutDuration, schedule flags/time later
     );
   }
 
@@ -372,60 +390,91 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min, // Fit content vertically
                 children: [
-                  IconButton(
-                    icon: Icon(Icons.emoji_emotions_outlined, color: _primaryColor),
-                    onPressed: () {
-                      // Implement emoji picker
-                    },
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.attach_file, color: _primaryColor),
-                    onPressed: () {
-                      // Implement file attachment
-                    },
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _messageController,
-                      decoration: InputDecoration(
-                        hintText: 'Type a message...',
-                        hintStyle: TextStyle(color: Colors.grey[400]),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(25),
-                          borderSide: BorderSide.none,
-                        ),
-                        filled: true,
-                        fillColor: Colors.grey[100],
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 10,
-                        ),
-                      ),
-                      textCapitalization: TextCapitalization.sentences,
-                      maxLines: null,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: _sendMessage,
-                    child: Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [_primaryColor, _secondaryColor],
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
-                        ),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.send,
-                        color: Colors.white,
-                        size: 22,
+                  // Show scheduled time if set
+                  if (_scheduledTime != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4.0),
+                      child: Text(
+                        'Scheduled for: ${_formatScheduleTime(_scheduledTime)}',
+                        style: TextStyle(color: Colors.blue[700], fontSize: 12),
                       ),
                     ),
+                  // Show burnout duration if set
+                  if (_isBurnoutMode && _burnoutDuration != null)
+                     Padding(
+                       padding: const EdgeInsets.only(bottom: 4.0),
+                       child: Text(
+                         'Burnout Enabled: Expires in ${_burnoutDuration!.inSeconds}s',
+                         style: TextStyle(color: Colors.orange[700], fontSize: 12),
+                       ),
+                     ),
+                  Row(
+                    children: [
+                      // --- Burnout Mode Button ---
+                      IconButton(
+                        icon: Icon(
+                          Icons.local_fire_department_outlined,
+                          color: _isBurnoutMode ? Colors.orange[700] : Colors.grey[600],
+                        ),
+                        tooltip: 'Configure Burnout Mode',
+                        onPressed: _showBurnoutDialog,
+                      ),
+                      // --- Schedule Message Button ---
+                      IconButton(
+                        icon: Icon(
+                          Icons.schedule_outlined,
+                          color: _scheduledTime != null ? Colors.blue[700] : Colors.grey[600],
+                        ),
+                        tooltip: _scheduledTime == null ? 'Schedule Message' : 'Cancel Schedule',
+                        onPressed: _handleScheduleTap,
+                      ),
+                      // --- Text Input Field ---
+                      Expanded(
+                        child: TextField(
+                          controller: _messageController,
+                          decoration: InputDecoration(
+                            hintText: 'Type a message...',
+                            hintStyle: TextStyle(color: Colors.grey[400]),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(25),
+                              borderSide: BorderSide.none,
+                            ),
+                            filled: true,
+                            fillColor: Colors.grey[100],
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 10,
+                            ),
+                          ),
+                          textCapitalization: TextCapitalization.sentences,
+                          maxLines: null,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // --- Send Button ---
+                      GestureDetector(
+                        onTap: _sendMessage,
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [_primaryColor, _secondaryColor],
+                              begin: Alignment.centerLeft,
+                              end: Alignment.centerRight,
+                            ),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.send,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -522,6 +571,159 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
         ],
       ),
+    );
+  }
+
+  // --- Helper Methods ---
+  void _handleScheduleTap() async {
+    if (_scheduledTime != null) {
+      // Cancel existing schedule
+      setState(() {
+        _scheduledTime = null;
+      });
+    } else {
+      // Show date & time picker
+      final now = DateTime.now();
+      final DateTime? pickedDate = await showDatePicker(
+        context: context,
+        initialDate: now,
+        firstDate: now, // Can only schedule for future
+        lastDate: now.add(const Duration(days: 365)), // Limit to 1 year
+      );
+
+      if (pickedDate != null && mounted) {
+        final TimeOfDay? pickedTime = await showTimePicker(
+          context: context,
+          initialTime: TimeOfDay.fromDateTime(now.add(const Duration(minutes: 5))), // Default to 5 mins from now
+        );
+
+        if (pickedTime != null) {
+          final selectedDateTime = DateTime(
+            pickedDate.year,
+            pickedDate.month,
+            pickedDate.day,
+            pickedTime.hour,
+            pickedTime.minute,
+          );
+
+          // Ensure the selected time is in the future
+          if (selectedDateTime.isAfter(DateTime.now())) {
+            setState(() {
+              _scheduledTime = selectedDateTime;
+              _isBurnoutMode = false; // Deactivate burnout mode
+              _burnoutDuration = null; // Clear burnout duration
+            });
+          } else {
+            // Show error if time is in the past
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Scheduled time must be in the future.')),
+            );
+          }
+        }
+      }
+    }
+  }
+
+  String _formatScheduleTime(DateTime? time) {
+    if (time == null) return '';
+    // Use a more detailed format for scheduled time
+    final day = time.day.toString().padLeft(2, '0');
+    final month = time.month.toString().padLeft(2, '0');
+    final year = time.year;
+    int hour = time.hour;
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = hour < 12 ? 'AM' : 'PM';
+    if (hour == 0) hour = 12;
+    if (hour > 12) hour -= 12;
+    return '$day/$month/$year $hour:$minute $period';
+  }
+
+  // --- New Burnout Dialog Method ---
+  void _showBurnoutDialog() {
+    // Temporary variables to hold dialog state
+    bool tempIsEnabled = _isBurnoutMode;
+    Duration tempDuration = _burnoutDuration ?? const Duration(seconds: 10); // Default if null
+    final List<Duration> availableDurations = [
+      const Duration(seconds: 5),
+      const Duration(seconds: 10),
+      const Duration(seconds: 30),
+      const Duration(minutes: 1),
+    ];
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Configure Burnout Mode'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  SwitchListTile(
+                    title: const Text('Enable Burnout'),
+                    value: tempIsEnabled,
+                    onChanged: (bool value) {
+                      setDialogState(() {
+                        tempIsEnabled = value;
+                      });
+                    },
+                    activeColor: _primaryColor,
+                  ),
+                  if (tempIsEnabled)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0, left: 16.0, right: 16.0),
+                      child: DropdownButtonFormField<Duration>(
+                        value: tempDuration,
+                        items: availableDurations.map((duration) {
+                          return DropdownMenuItem<Duration>(
+                            value: duration,
+                            child: Text('${duration.inSeconds} seconds'),
+                          );
+                        }).toList(),
+                        onChanged: (Duration? newValue) {
+                          if (newValue != null) {
+                             setDialogState(() {
+                                tempDuration = newValue;
+                             });
+                          }
+                        },
+                        decoration: const InputDecoration(
+                          labelText: 'Expire after',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  child: const Text('Cancel'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+                TextButton(
+                  child: const Text('Set'),
+                  onPressed: () {
+                    // Update the main screen state
+                    setState(() {
+                      _isBurnoutMode = tempIsEnabled;
+                      if (_isBurnoutMode) {
+                        _burnoutDuration = tempDuration;
+                        _scheduledTime = null; // Deactivate schedule mode
+                      } else {
+                        _burnoutDuration = null;
+                      }
+                    });
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }
