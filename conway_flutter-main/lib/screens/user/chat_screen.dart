@@ -212,12 +212,26 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _formatTime(String? timeString) {
     if (timeString == null) return '';
-    
+
     try {
-      final DateTime time = DateTime.parse(timeString).toLocal();
-      return '${time.hour}:${time.minute.toString().padLeft(2, '0')}';
+      // Parse the ISO 8601 string (likely UTC from server)
+      final DateTime utcTime = DateTime.parse(timeString);
+      // Convert to local time zone
+      final DateTime localTime = utcTime.toLocal();
+
+      // Format as 12-hour time with AM/PM (e.g., 5:53 PM)
+      int hour = localTime.hour;
+      final String minute = localTime.minute.toString().padLeft(2, '0');
+      final String period = hour < 12 ? 'AM' : 'PM';
+      if (hour == 0) { // Handle midnight
+        hour = 12;
+      } else if (hour > 12) {
+        hour -= 12;
+      }
+      return '$hour:$minute $period';
     } catch (e) {
-      return '';
+      print("Error formatting time in ChatScreen '$timeString': $e");
+      return ''; // Return empty on error
     }
   }
 
