@@ -1,0 +1,27 @@
+# Flutter specific
+build/
+.dart_tool/
+.packages
+.metadata
+*.iml
+*.idea/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# IDE specific (VSCode)
+.vscode/
+
+# Node.js specific
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Other
+*.DS_Store
