@@ -39,7 +39,7 @@ async function sendOTPEmail(email, otp) {
         <p>If you didn't request this verification, please ignore this email.</p>
         <p>Best Regards,<br>Conway App Team</p>
       </div>
-    `
+    `,
   };
 
   return transporter.sendMail(mailOptions);
@@ -69,19 +69,20 @@ router.post("/request-otp", async (req, res) => {
 
     // Generate OTP
     const otp = generateOTP();
-    
+
     // Store OTP and user data temporarily (expires in 10 minutes)
     otpStore.set(email, {
       otp,
       userData: { fullname, username, email, password },
-      expiresAt: Date.now() + 10 * 60 * 1000 // 10 minutes
+      expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
     });
 
     // Send OTP via email
     await sendOTPEmail(email, otp);
 
-    res.status(200).json({ 
-      message: "OTP sent to your email. Please verify to complete registration." 
+    res.status(200).json({
+      message:
+        "OTP sent to your email. Please verify to complete registration.",
     });
   } catch (error) {
     console.error("OTP request error:", error);
@@ -100,20 +101,28 @@ router.post("/verify-otp", async (req, res) => {
 
     // Check if OTP exists and is valid
     const otpData = otpStore.get(email);
-    
+
     if (!otpData) {
-      return res.status(404).json({ message: "OTP not found or expired. Please request a new one." });
+      return res
+        .status(404)
+        .json({
+          message: "OTP not found or expired. Please request a new one.",
+        });
     }
 
     // Check if OTP has expired
     if (Date.now() > otpData.expiresAt) {
       otpStore.delete(email);
-      return res.status(400).json({ message: "OTP has expired. Please request a new one." });
+      return res
+        .status(400)
+        .json({ message: "OTP has expired. Please request a new one." });
     }
 
     // Check if OTP matches
     if (otpData.otp !== otp) {
-      return res.status(400).json({ message: "Invalid OTP. Please try again." });
+      return res
+        .status(400)
+        .json({ message: "Invalid OTP. Please try again." });
     }
 
     // OTP is valid, proceed with user registration
@@ -128,7 +137,8 @@ router.post("/verify-otp", async (req, res) => {
       fullname,
       userName: username,
       email: userEmail,
-      password: hashedPassword
+      password: hashedPassword,
+      // profileUrl will be default ('') initially
     });
 
     await newUser.save();
@@ -136,9 +146,19 @@ router.post("/verify-otp", async (req, res) => {
     // Remove OTP data
     otpStore.delete(email);
 
-    res.status(201).json({ 
-      message: "Account created successfully", 
-      user: newUser 
+    // Select fields to return (exclude password)
+    const userToReturn = {
+      _id: newUser._id,
+      fullname: newUser.fullname,
+      userName: newUser.userName,
+      email: newUser.email,
+      profileUrl: newUser.profileUrl,
+      createdAt: newUser.createdAt,
+    };
+
+    res.status(201).json({
+      message: "Account created successfully",
+      user: userToReturn,
     });
   } catch (error) {
     console.error("OTP verification error:", error);
@@ -180,7 +200,18 @@ router.post("/register", async (req, res) => {
       password: hashedPassword,
     });
     await user.save();
-    res.status(201).json({ message: "User registered successfully", user });
+    // Select fields to return
+    const userToReturn = {
+      _id: user._id,
+      fullname: user.fullname,
+      userName: user.userName,
+      email: user.email,
+      profileUrl: user.profileUrl,
+      createdAt: user.createdAt,
+    };
+    res
+      .status(201)
+      .json({ message: "User registered successfully", user: userToReturn });
   } catch (err) {
     console.error("Registration error:", err);
     res.status(500).json({ message: "Server error during registration" });
@@ -194,19 +225,18 @@ router.post("/login", async (req, res) => {
 
     // Validate input
     if (!identifier || !password) {
-      return res.status(400).json({ message: "Email/username and password are required" });
+      return res
+        .status(400)
+        .json({ message: "Email/username and password are required" });
     }
 
     // Find user by email or username
     const user = await User.findOne({
-      $or: [
-        { email: identifier },
-        { userName: identifier }
-      ]
+      $or: [{ email: identifier }, { userName: identifier }],
     });
 
     if (!user) {
-      return res.status(401).json({ message: "user not found" });
+      return res.status(401).json({ message: "User not found" });
     }
 
     // Compare passwords
@@ -215,7 +245,17 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    res.status(200).json({ message: "Login successful", user });
+    // Select fields to return
+    const userToReturn = {
+      _id: user._id,
+      fullname: user.fullname,
+      userName: user.userName,
+      email: user.email,
+      profileUrl: user.profileUrl,
+      createdAt: user.createdAt,
+    };
+
+    res.status(200).json({ message: "Login successful", user: userToReturn });
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({ message: "Server error" });
@@ -228,70 +268,76 @@ router.post("/google-auth", async (req, res) => {
     const { email, fullname, photoURL, firebaseUID } = req.body;
 
     if (!email || !firebaseUID) {
-      return res.status(400).json({ message: "Email and Firebase UID are required" });
+      return res
+        .status(400)
+        .json({ message: "Email and Firebase UID are required" });
     }
 
     // Check if a user with this email already exists
     let user = await User.findOne({ email });
+    let isExistingAccount = true;
 
     if (user) {
-      // User exists - update their profile with Google info
+      // User exists - Update info
       user.profileUrl = photoURL || user.profileUrl;
       user.firebaseUID = firebaseUID;
-      
-      // If the user doesn't have a fullname (rare case), set it from Google data
       if (!user.fullname && fullname) {
         user.fullname = fullname;
       }
-      
       await user.save();
-      return res.status(200).json({ 
-        message: "Google account linked to existing account", 
-        user,
-        isExistingAccount: true
-      });
     } else {
-      // No existing user - create a new one with Google data
-      // Generate a random username from the email (before the @ symbol)
-      const baseUsername = email.split('@')[0];
-      let username = baseUsername;
-      let usernameExists = true;
+      // New user via Google Sign-In
+      isExistingAccount = false;
+      // Generate a unique username (e.g., from email prefix or random string)
+      let potentialUsername = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "");
+      if (potentialUsername.length < 3)
+        potentialUsername += Math.random().toString(36).substring(2, 5);
+      let usernameExists = await User.findOne({ userName: potentialUsername });
       let counter = 1;
-      
-      // Keep trying until we find an available username
       while (usernameExists) {
-        const existingUser = await User.findOne({ userName: username });
-        if (!existingUser) {
-          usernameExists = false;
-        } else {
-          username = `${baseUsername}${counter}`;
-          counter++;
-        }
+        potentialUsername = `${email.split("@")[0]}${counter}`;
+        usernameExists = await User.findOne({ userName: potentialUsername });
+        counter++;
       }
-      
-      // Create the new user
-      const newUser = new User({
+
+      // Generate a placeholder password (user won't use it directly)
+      const placeholderPassword = Math.random().toString(36).slice(-10);
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(placeholderPassword, salt);
+
+      user = new User({
         fullname: fullname || "Google User",
-        userName: username,
+        userName: potentialUsername,
         email,
+        password: hashedPassword,
         profileUrl: photoURL || "",
         firebaseUID,
-        // Set a secure random password that the user can't use
-        // (they'll authenticate with Google)
-        password: await bcrypt.hash(Math.random().toString(36).slice(-10), 10)
       });
-      
-      await newUser.save();
-      
-      return res.status(201).json({ 
-        message: "New account created with Google", 
-        user: newUser,
-        isExistingAccount: false
-      });
+      await user.save();
     }
+
+    // Select fields to return
+    const userToReturn = {
+      _id: user._id,
+      fullname: user.fullname,
+      userName: user.userName,
+      email: user.email,
+      profileUrl: user.profileUrl,
+      createdAt: user.createdAt,
+    };
+
+    res.status(isExistingAccount ? 200 : 201).json({
+      message: isExistingAccount
+        ? "Google login successful"
+        : "Google account created and logged in",
+      user: userToReturn,
+      isExistingAccount,
+    });
   } catch (error) {
     console.error("Google auth error:", error);
-    res.status(500).json({ message: "Server error" });
+    res
+      .status(500)
+      .json({ message: "Server error during Google authentication" });
   }
 });
 
@@ -307,28 +353,28 @@ router.post("/resend-otp", async (req, res) => {
 
     // Check if there's an existing OTP request
     const existingRequest = otpStore.get(email);
-    
+
     if (!existingRequest) {
-      return res.status(404).json({ 
-        message: "No pending registration found for this email" 
+      return res.status(404).json({
+        message: "No pending registration found for this email",
       });
     }
 
     // Generate new OTP
     const otp = generateOTP();
-    
+
     // Update the OTP and expiration
     otpStore.set(email, {
       otp,
       userData: existingRequest.userData,
-      expiresAt: Date.now() + 10 * 60 * 1000 // 10 minutes
+      expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
     });
 
     // Send new OTP via email
     await sendOTPEmail(email, otp);
 
-    res.status(200).json({ 
-      message: "New OTP sent to your email" 
+    res.status(200).json({
+      message: "New OTP sent to your email",
     });
   } catch (error) {
     console.error("Resend OTP error:", error);

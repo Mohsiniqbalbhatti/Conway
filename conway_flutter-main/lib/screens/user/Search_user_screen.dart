@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import '../../models/user.dart';
+import '../../models/user.dart' as conway_user; // Alias User model
 import '../../helpers/database_helper.dart';
 import './chat_screen.dart';
 import '../../constants/api_config.dart';
+import 'package:cached_network_image/cached_network_image.dart'; // Import
+import 'dart:async'; // Import for Timer
 
 class SearchUserScreen extends StatefulWidget {
-  const SearchUserScreen({Key? key}) : super(key: key);
+  const SearchUserScreen({super.key}); // Use super parameters
 
   @override
-  _SearchUserScreenState createState() => _SearchUserScreenState();
+  State<SearchUserScreen> createState() => _SearchUserScreenState(); // Make state public
 }
 
 class _SearchUserScreenState extends State<SearchUserScreen> {
@@ -18,80 +20,148 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
   final FocusNode _searchFocusNode = FocusNode();
   final Color _primaryColor = const Color(0xFF19BFB7);
   final Color _secondaryColor = const Color(0xFF59A52C);
-  
+
   List<Map<String, dynamic>> _searchedUsers = [];
   bool _isLoading = false;
-  User? _currentUser;
-  
+  conway_user.User? _currentUser;
+  Timer? _debounce; // Timer for debouncing search requests
+
   @override
   void initState() {
     super.initState();
     _loadUserData();
-    
-    // Set focus to search field after widget is built
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _searchFocusNode.requestFocus();
     });
   }
-  
+
   @override
   void dispose() {
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _debounce?.cancel(); // Cancel timer on dispose
     super.dispose();
   }
-  
+
   Future<void> _loadUserData() async {
     final user = await DBHelper().getUser();
-    setState(() {
-      _currentUser = user;
+    if (mounted) {
+      // Add mounted check
+      setState(() {
+        _currentUser = user;
+      });
+    }
+  }
+
+  void _onSearchChanged(String query) {
+    // Cancel previous timer if active
+    _debounce?.cancel();
+    if (query.trim().isEmpty) {
+      // Clear results immediately if query is empty
+      setState(() {
+        _searchedUsers = [];
+        _isLoading = false;
+      });
+      return;
+    }
+    // Start a new timer
+    _debounce = Timer(const Duration(milliseconds: 500), () {
+      // Only search if the query hasn't changed during the debounce period
+      if (_searchController.text == query) {
+        _searchUsers(query.trim());
+      }
     });
   }
-  
-  Future<void> _searchUsers() async {
-    if (_searchController.text.trim().isEmpty || _currentUser == null) return;
-    
-    setState(() {
-      _isLoading = true;
-    });
-    
+
+  Future<void> _searchUsers(String query) async {
+    if (query.isEmpty || _currentUser == null) return;
+
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/search-user'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'useremail': _currentUser!.email,
-          'content': _searchController.text.trim(),
-        }),
-      );
-      
-      if (response.statusCode == 200) {
+      // Use the correct search endpoint (assuming it's /api/search-user)
+      // **Verify this endpoint exists and returns profileUrl**
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/search-user'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'useremail': _currentUser!.email,
+              'content': query,
+            }),
+          )
+          .timeout(const Duration(seconds: 10)); // Add timeout
+
+      debugPrint('Search Response Status: ${response.statusCode}');
+      debugPrint('Search Response Body: ${response.body}');
+
+      if (response.statusCode == 200 && mounted) {
         final data = jsonDecode(response.body);
         setState(() {
           _searchedUsers = List<Map<String, dynamic>>.from(data['users']);
         });
+      } else if (mounted) {
+        // Handle errors (e.g., show a snackbar)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Search failed: ${response.statusCode}')),
+        );
       }
     } catch (e) {
-      print('Error searching users: $e');
+      debugPrint('Error searching users: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Network error during search: ${e.toString()}'),
+          ),
+        );
+      }
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        // Check mounted before final setState
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
-  
+
   void _startChat(Map<String, dynamic> user) {
+    // Check if required fields exist before navigating
+    final String? userName = user['fullname'];
+    final String? userEmail = user['email'];
+    final String? profileUrl = user['profileUrl']; // Get profile URL
+
+    if (userName == null || userEmail == null) {
+      debugPrint("Error: Missing user details for chat.");
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not start chat. User details missing.'),
+        ),
+      );
+      return;
+    }
+
     final index = _searchedUsers.indexOf(user);
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          userName: user['fullname'],
-          userIndex: index,
-          userEmail: user['email'],
-        ),
+        builder:
+            (_) => ChatScreen(
+              userName: userName,
+              userIndex:
+                  index, // Pass index for color consistency in chat screen
+              userEmail: userEmail,
+              profileUrl: profileUrl, // Pass profile URL to ChatScreen
+            ),
       ),
-    ).then((_) => Navigator.pop(context, true)); // Return true to refresh the chat list
+    ).then(
+      (_) => Navigator.pop(context, true),
+    ); // Return true to refresh the chat list
   }
 
   @override
@@ -137,19 +207,25 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
                   icon: const Icon(Icons.clear),
                   onPressed: () {
                     _searchController.clear();
-                    setState(() {
-                      _searchedUsers = [];
-                    });
+                    _onSearchChanged(
+                      '',
+                    ); // Trigger clearing results via debouncer logic
                   },
                 ),
               ),
-              onChanged: (_) => _searchUsers(),
+              onChanged: _onSearchChanged, // Use debounced search
             ),
           ),
-          
+
           if (_isLoading)
-            Center(child: CircularProgressIndicator(color: _primaryColor))
-          else if (_searchedUsers.isEmpty && _searchController.text.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Center(
+                child: CircularProgressIndicator(color: _primaryColor),
+              ),
+            )
+          else if (_searchedUsers.isEmpty &&
+              _searchController.text.trim().isNotEmpty)
             const Expanded(
               child: Center(
                 child: Text(
@@ -164,19 +240,27 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
                 itemCount: _searchedUsers.length,
                 itemBuilder: (context, index) {
                   final user = _searchedUsers[index];
+                  final profileUrl = user['profileUrl'] as String?;
+                  final hasProfileUrl =
+                      profileUrl != null && profileUrl.isNotEmpty;
+
                   return ListTile(
-                    leading: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: _getUserColor(index),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.person,
-                        color: Colors.white,
-                        size: 24,
-                      ),
+                    // Display Profile Picture
+                    leading: CircleAvatar(
+                      radius: 24,
+                      backgroundColor: _getUserColor(index),
+                      backgroundImage:
+                          hasProfileUrl
+                              ? CachedNetworkImageProvider(profileUrl)
+                              : null,
+                      child:
+                          !hasProfileUrl
+                              ? const Icon(
+                                Icons.person,
+                                color: Colors.white,
+                                size: 24,
+                              )
+                              : null,
                     ),
                     title: Text(
                       user['fullname'] ?? 'Unknown',
@@ -203,7 +287,7 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
       ),
     );
   }
-  
+
   Color _getUserColor(int index) {
     final colors = [
       _primaryColor,
@@ -213,4 +297,4 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
     ];
     return colors[index % colors.length];
   }
-} 
+}

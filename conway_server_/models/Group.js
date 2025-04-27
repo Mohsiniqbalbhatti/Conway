@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
 const groupSchema = new mongoose.Schema({
   groupName: {
@@ -9,13 +9,19 @@ const groupSchema = new mongoose.Schema({
   },
   creator: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: "User",
     required: true,
   },
-  users: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
+  profileUrl: {
+    type: String,
+    default: "",
+  },
+  users: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+  ],
   createdAt: {
     type: Date,
     default: Date.now,
@@ -27,7 +33,7 @@ const groupSchema = new mongoose.Schema({
   deleted_at: {
     type: Date,
     default: null,
-  }
+  },
 });
 
-module.exports = mongoose.model('Group', groupSchema);
+module.exports = mongoose.model("Group", groupSchema);

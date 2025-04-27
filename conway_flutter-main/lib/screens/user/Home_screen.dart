@@ -7,22 +7,24 @@ import './chat_screen.dart';
 import './group_chat_screen.dart';
 import './Search_user_screen.dart';
 import './Create_group_screen.dart';
-import '../../models/user.dart';
+import '../../models/user.dart' as conway_user;
 import '../../helpers/database_helper.dart';
 import '../../constants/api_config.dart';
 import '../../services/socket_service.dart';
 import 'dart:async';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class HomeScreen extends StatefulWidget {
   final VoidCallback? onLogout;
 
-  const HomeScreen({Key? key, this.onLogout}) : super(key: key);
+  const HomeScreen({super.key, this.onLogout});
 
   @override
-  _HomeScreenState createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class HomeScreenState extends State<HomeScreen>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   int _currentIndex = 0;
   final PageController _pageController = PageController();
@@ -36,7 +38,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   List<Map<String, dynamic>> _chats = [];
   List<Map<String, dynamic>> _groups = [];
   bool _isLoading = true;
-  User? _currentUser;
+  conway_user.User? _currentUser;
   String _searchQuery = '';
 
   final SocketService _socketService = SocketService();
@@ -46,20 +48,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _checkAuth();
     _loadUserData().then((_) {
       if (mounted && _currentUser != null) {
-         print("[HomeScreen] User loaded: ${_currentUser!.email} (ID: ${_currentUser!.id})");
-         // Ensure socket is connected *before* subscribing
-         _socketService.connect(_currentUser!.id.toString());
-         print("[HomeScreen] Socket connect initiated.");
-         // Now fetch initial data and subscribe
-         _fetchData();
-         _subscribeToMessages();
+        debugPrint(
+          "[HomeScreen] User loaded: ${_currentUser!.email} (ID: ${_currentUser!.id})",
+        );
+        _socketService.connect(_currentUser!.id.toString());
+        debugPrint("[HomeScreen] Socket connect initiated.");
+        _fetchData();
+        _subscribeToMessages();
       } else if (mounted) {
-         print("[HomeScreen] User not loaded after trying.");
-         // Handle error? Maybe show a message?
-         setState(() => _isLoading = false); // Stop loading indicator
+        debugPrint("[HomeScreen] User not loaded after trying.");
+        setState(() => _isLoading = false);
       }
     });
   }
@@ -72,33 +72,40 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     super.dispose();
   }
 
-  Future<void> _checkAuth() async {
-    await AuthGuard.isAuthenticated(context);
-  }
-
   Future<void> _loadUserData() async {
+    await AuthGuard.isAuthenticated(context);
     final user = await DBHelper().getUser();
     if (mounted) {
-      _currentUser = user;
+      setState(() {
+        _currentUser = user;
+      });
+    } else {
+      debugPrint("[HomeScreen _loadUserData] Not mounted after loading user.");
     }
   }
 
   Future<void> _fetchData() async {
     if (_currentUser == null) {
-       print("[HomeScreen FETCH] User not loaded yet, skipping fetch.");
-       return;
+      debugPrint("[HomeScreen FETCH] User not loaded yet, skipping fetch.");
+      return;
     }
-    print("[HomeScreen FETCH] Starting data fetch for user: ${_currentUser?.email}");
-    setState(() => _isLoading = true);
+    debugPrint(
+      "[HomeScreen FETCH] Starting data fetch for user: ${_currentUser?.email}",
+    );
+    if (mounted) setState(() => _isLoading = true);
 
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/getupdate'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'myemail': _currentUser!.email}),
-      ).timeout(const Duration(seconds: 15));
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/getupdate'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'myemail': _currentUser!.email}),
+          )
+          .timeout(const Duration(seconds: 15));
 
-      print("[HomeScreen FETCH] API response status: ${response.statusCode}");
+      debugPrint(
+        "[HomeScreen FETCH] API response status: ${response.statusCode}",
+      );
 
       if (!mounted) return;
 
@@ -106,215 +113,234 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         final data = jsonDecode(response.body);
         final List<dynamic> messages = data['message'] ?? [];
 
-        setState(() {
-            final Map<String, Map<String, dynamic>> userChats = {};
-            for (var msgData in messages) {
-              if (msgData is Map<String, dynamic>) {
-                final String? email = msgData['email'];
-                final String? rawTimeString = msgData['time']?.toString();
-                if (email != null && email != _currentUser!.email) {
-                  userChats[email] = {
-                    'name': msgData['name'] ?? 'Unknown',
-                    'email': email,
-                    'message': msgData['message'] ?? '',
-                    'time': _formatTime(rawTimeString),
-                    'rawTime': rawTimeString,
-                  };
-                }
-              }
+        // Process chats (fetching profile URL from user data)
+        final Map<String, Map<String, dynamic>> userChats = {};
+        final List<Future<void>> userFetchFutures =
+            []; // For fetching missing user details
+
+        for (var msgData in messages) {
+          if (msgData is Map<String, dynamic>) {
+            final String? email = msgData['email'];
+            final String? rawTimeString = msgData['time']?.toString();
+            if (email != null && email != _currentUser!.email) {
+              // Look up user details (implement a user service or fetch directly)
+              // For now, assume msgData contains necessary details if backend provides them
+              userChats[email] = {
+                'name': msgData['name'] ?? 'Unknown',
+                'email': email,
+                'profileUrl':
+                    msgData['profileUrl'], // **Use profileUrl from response**
+                'message': msgData['message'] ?? '',
+                'time': _formatTime(rawTimeString),
+                'rawTime': rawTimeString,
+              };
             }
+          }
+        }
+
+        // TODO: If backend doesn't send profileUrl in /getupdate message list,
+        // you would need to fetch user details separately based on email here.
+
+        // Process Groups
+        final List<Map<String, dynamic>> groupsData =
+            (data['groups'] as List<dynamic>? ?? []).map((group) {
+              return {
+                'name': group['name'],
+                'id': group['groupId'],
+                'members': '${group['memberCount'] ?? 'Unknown'} members',
+                'lastActive': group['lastActive'] ?? 'Unknown',
+                // Add group icon/url if backend provides it
+                'groupProfileUrl':
+                    group['groupProfileUrl'], // **Assume backend sends this**
+              };
+            }).toList();
+
+        if (mounted) {
+          setState(() {
             _chats = userChats.values.toList();
-
-            // Process Groups
-             _groups = (data['groups'] as List<dynamic>? ?? []).map((group) {
-               return {
-                 'name': group['name'],
-                 'id': group['groupId'],
-                 'members': '${group['memberCount'] ?? 'Unknown'} members',
-                 'lastActive': group['lastActive'] ?? 'Unknown',
-               };
-             }).toList();
-
+            _groups = groupsData;
             _sortChats();
             _isLoading = false;
-            print("[HomeScreen FETCH] Processed chats/groups for UI");
-        });
+            debugPrint("[HomeScreen FETCH] Processed chats/groups for UI");
+          });
+        }
       } else {
-        print('[HomeScreen FETCH] Error fetching data: Status code ${response.statusCode}');
-         setState(() => _isLoading = false);
+        debugPrint(
+          '[HomeScreen FETCH] Error fetching data: Status code ${response.statusCode}',
+        );
+        if (mounted) setState(() => _isLoading = false);
+        // Show error message?
       }
     } catch (e) {
-       print('[HomeScreen FETCH] Error fetching data: $e');
-       if (!mounted) return;
-       setState(() => _isLoading = false);
+      debugPrint('[HomeScreen FETCH] Error fetching data: $e');
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      // Show error message?
     }
   }
 
   void _subscribeToMessages() {
-     _messageSubscription?.cancel();
-     print("[HomeScreen] Subscribing to messages...");
-     _messageSubscription = _socketService.onMessageReceived.listen((messageData) {
-         print("[HomeScreen LISTENER] Received message via stream: $messageData");
-         if (!mounted || _currentUser == null) {
-             print("[HomeScreen LISTENER] Not mounted or user null, ignoring message.");
-             return;
-         }
+    _messageSubscription?.cancel();
+    debugPrint("[HomeScreen] Subscribing to messages...");
+    _messageSubscription = _socketService.onMessageReceived.listen((
+      messageData,
+    ) {
+      debugPrint(
+        "[HomeScreen LISTENER] Received message via stream: $messageData",
+      );
+      if (!mounted || _currentUser == null) {
+        debugPrint(
+          "[HomeScreen LISTENER] Not mounted or user null, ignoring message.",
+        );
+        return;
+      }
 
-         final senderEmail = messageData['senderEmail'] as String?;
-         final receiverEmail = messageData['receiverEmail'] as String?;
-         final messageText = messageData['text'] as String? ?? '';
-         final messageTime = messageData['time'] as String?;
-         final senderName = messageData['senderName'] as String?;
+      final senderEmail = messageData['senderEmail'] as String?;
+      final receiverEmail = messageData['receiverEmail'] as String?;
+      final messageText = messageData['text'] as String? ?? '';
+      final messageTime = messageData['time'] as String?;
+      final senderName = messageData['senderName'] as String?;
+      final senderProfileUrl =
+          messageData['senderProfileUrl']
+              as String?; // **Assume backend sends this**
 
-         String? chatPartnerEmail;
-         String? chatPartnerName;
+      String? chatPartnerEmail;
+      String? chatPartnerName;
+      String? chatPartnerProfileUrl;
 
-         if (senderEmail == _currentUser!.email) {
-             chatPartnerEmail = receiverEmail;
-             chatPartnerName = null;
-              print("[HomeScreen LISTENER] Ignored message I sent to $chatPartnerEmail");
-             return;
-         } else if (receiverEmail == _currentUser!.email) {
-             chatPartnerEmail = senderEmail;
-             chatPartnerName = senderName;
-             print("[HomeScreen LISTENER] Message received from $chatPartnerEmail ($chatPartnerName)");
-         } else {
-              print("[HomeScreen LISTENER] Message not relevant (Sender: $senderEmail, Receiver: $receiverEmail, Me: ${_currentUser!.email})");
-              return;
-         }
+      if (senderEmail == _currentUser!.email) {
+        // Message I sent - update the chat corresponding to the receiver
+        chatPartnerEmail = receiverEmail;
+        // We might not get receiver details in this payload, so fetch if needed or use existing
+        final existingChat = _chats.firstWhere(
+          (c) => c['email'] == chatPartnerEmail,
+          orElse: () => {},
+        );
+        chatPartnerName = existingChat['name'];
+        chatPartnerProfileUrl = existingChat['profileUrl'];
+        debugPrint(
+          "[HomeScreen LISTENER] Updated message I sent to $chatPartnerEmail",
+        );
+      } else if (receiverEmail == _currentUser!.email) {
+        // Message I received - update the chat corresponding to the sender
+        chatPartnerEmail = senderEmail;
+        chatPartnerName = senderName;
+        chatPartnerProfileUrl = senderProfileUrl;
+        debugPrint(
+          "[HomeScreen LISTENER] Message received from $chatPartnerEmail ($chatPartnerName)",
+        );
+      } else {
+        debugPrint(
+          "[HomeScreen LISTENER] Message not relevant (Sender: $senderEmail, Receiver: $receiverEmail, Me: ${_currentUser!.email})",
+        );
+        return;
+      }
 
+      if (chatPartnerEmail != null) {
+        debugPrint(
+          "[HomeScreen LISTENER] Updating chat list for partner: $chatPartnerEmail",
+        );
+        if (mounted) {
+          setState(() {
+            final chatIndex = _chats.indexWhere(
+              (chat) => chat['email'] == chatPartnerEmail,
+            );
 
-         if (chatPartnerEmail != null) {
-             print("[HomeScreen LISTENER] Updating chat list for partner: $chatPartnerEmail");
-             final List<Map<String, dynamic>> chatsBeforeUpdate = List.from(_chats);
-             print("[HomeScreen LISTENER] _chats list BEFORE update (${chatsBeforeUpdate.length} items): $chatsBeforeUpdate");
+            Map<String, dynamic> updatedChatData = {
+              'email': chatPartnerEmail,
+              'name': chatPartnerName ?? 'Unknown',
+              'profileUrl':
+                  chatPartnerProfileUrl, // Use the profile URL from stream/existing
+              'message': messageText,
+              'time': _formatTime(messageTime),
+              'rawTime': messageTime,
+            };
 
-             setState(() {
-               print("[HomeScreen LISTENER] Inside setState...");
-               final chatIndex = _chats.indexWhere((chat) => chat['email'] == chatPartnerEmail);
-               print("[HomeScreen LISTENER] Found chat index: $chatIndex");
-
-               Map<String, dynamic> updatedChatData = {
-                   'email': chatPartnerEmail,
-                   'name': 'Unknown',
-                   'message': messageText,
-                   'time': _formatTime(messageTime),
-                   'rawTime': messageTime,
-               };
-
-               if (chatIndex != -1) {
-                   updatedChatData['name'] = _chats[chatIndex]['name'];
-                   _chats[chatIndex] = updatedChatData;
-                   print("[HomeScreen LISTENER] Updated _chats[$chatIndex] with: $updatedChatData");
-               } else {
-                   updatedChatData['name'] = chatPartnerName ?? 'New Chat';
-                   _chats.add(updatedChatData);
-                   print("[HomeScreen LISTENER] Added new entry to _chats: $updatedChatData");
-               }
-
-               print("[HomeScreen LISTENER] _chats list BEFORE sort (${_chats.length} items): $_chats");
-               _sortChats();
-               print("[HomeScreen LISTENER] _chats list AFTER sort (${_chats.length} items): $_chats");
-               print("[HomeScreen LISTENER] ...exiting setState.");
-             });
-         }
-     });
-      print("[HomeScreen] Message subscription setup complete.");
+            if (chatIndex != -1) {
+              _chats[chatIndex] = updatedChatData;
+            } else {
+              // Only add if it was a message received, not one I sent
+              if (receiverEmail == _currentUser!.email) {
+                _chats.add(updatedChatData);
+              }
+            }
+            _sortChats();
+          });
+        }
+      }
+    });
+    debugPrint("[HomeScreen] Message subscription setup complete.");
   }
 
   String _formatTime(String? timeString) {
     if (timeString == null) return '';
-
     try {
-      // Parse the ISO 8601 string (likely UTC from server)
       final DateTime utcTime = DateTime.parse(timeString);
-      // Convert to local time zone
       final DateTime localTime = utcTime.toLocal();
-
       final DateTime now = DateTime.now();
       final Duration difference = now.difference(localTime);
-
-      // Format based on how recent it is
       if (difference.inDays == 0 && localTime.day == now.day) {
-        // Today: Format as 12-hour time (e.g., 5:53 PM)
         int hour = localTime.hour;
         final String minute = localTime.minute.toString().padLeft(2, '0');
         final String period = hour < 12 ? 'AM' : 'PM';
-        if (hour == 0) { // Handle midnight
+        if (hour == 0)
           hour = 12;
-        } else if (hour > 12) {
+        else if (hour > 12)
           hour -= 12;
-        }
         return '$hour:$minute $period';
-      } else if (difference.inDays == 1 || (difference.inDays == 0 && localTime.day == now.day - 1)) {
-        // Yesterday
+      } else if (difference.inDays == 1 ||
+          (difference.inDays == 0 && localTime.day == now.day - 1)) {
         return 'Yesterday';
       } else {
-        // Older: Format as date (e.g., 25/04/2025)
         final String day = localTime.day.toString().padLeft(2, '0');
         final String month = localTime.month.toString().padLeft(2, '0');
         final String year = localTime.year.toString();
         return '$day/$month/$year';
       }
     } catch (e) {
-      print("Error formatting time '$timeString': $e");
-      return ''; // Return empty or original string on error
+      debugPrint("Error formatting time '$timeString': $e");
+      return '';
     }
   }
 
   void _sortChats() {
-       _chats.sort((a, b) {
-            final String? rawTimeA = a['rawTime'];
-            final String? rawTimeB = b['rawTime'];
-            try {
-              DateTime? timeA = rawTimeA != null ? DateTime.parse(rawTimeA) : null;
-              DateTime? timeB = rawTimeB != null ? DateTime.parse(rawTimeB) : null;
-              if (timeA == null && timeB == null) return 0;
-              if (timeA == null) return 1; 
-              if (timeB == null) return -1;
-              return timeB.compareTo(timeA); // Sort descending
-            } catch (e) {
-                 print("Error parsing time during sort: $e");
-                 return 0; // Keep original order on error
-            }
-       });
+    _chats.sort((a, b) {
+      final String? rawTimeA = a['rawTime'];
+      final String? rawTimeB = b['rawTime'];
+      try {
+        DateTime? timeA = rawTimeA != null ? DateTime.parse(rawTimeA) : null;
+        DateTime? timeB = rawTimeB != null ? DateTime.parse(rawTimeB) : null;
+        if (timeA == null && timeB == null) return 0;
+        if (timeA == null) return 1;
+        if (timeB == null) return -1;
+        return timeB.compareTo(timeA);
+      } catch (e) {
+        debugPrint("Error parsing time during sort: $e");
+        return 0;
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    // Get current user's profile URL for the AppBar
+    final currentUserProfileUrl = _currentUser?.profileUrl;
+    final hasCurrentUserProfileUrl =
+        currentUserProfileUrl != null && currentUserProfileUrl.isNotEmpty;
+
     return Scaffold(
       backgroundColor: _backgroundColor,
-      appBar: _buildAppBar(),
+      appBar: _buildAppBar(hasCurrentUserProfileUrl, currentUserProfileUrl),
       body: Column(
         children: [
           // Search Bar
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: TextField(
-              readOnly: true,
-              onTap: () {
-                if (_currentIndex == 0) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const SearchUserScreen()),
-                  ).then((refreshNeeded) {
-                    if (refreshNeeded == true) {
-                      _fetchData();
-                    }
-                  });
-                } else {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
-                  ).then((refreshNeeded) {
-                    if (refreshNeeded == true) {
-                      _fetchData();
-                    }
-                  });
-                }
-              },
+              onChanged:
+                  (value) => setState(() => _searchQuery = value.toLowerCase()),
               decoration: InputDecoration(
-                hintText: 'Search...',
+                hintText: 'Search chats or groups...',
                 prefixIcon: Icon(Icons.search, color: _primaryColor),
                 filled: true,
                 fillColor: Colors.grey[100],
@@ -322,25 +348,28 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   borderRadius: BorderRadius.circular(30),
                   borderSide: BorderSide.none,
                 ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 20),
+                contentPadding: const EdgeInsets.symmetric(
+                  vertical: 0,
+                  horizontal: 20,
+                ),
               ),
             ),
           ),
           // Main Content
           Expanded(
-            child: _isLoading
-                ? Center(child: CircularProgressIndicator(color: _primaryColor))
-                : PageView(
-                    controller: _pageController,
-                    onPageChanged: (index) {
-                      setState(() => _currentIndex = index);
-                      _tabController.animateTo(index);
-                    },
-                    children: [
-                      _buildChatList(),
-                      _buildGroupList(),
-                    ],
-                  ),
+            child:
+                _isLoading
+                    ? Center(
+                      child: CircularProgressIndicator(color: _primaryColor),
+                    )
+                    : PageView(
+                      controller: _pageController,
+                      onPageChanged: (index) {
+                        setState(() => _currentIndex = index);
+                        _tabController.animateTo(index);
+                      },
+                      children: [_buildChatList(), _buildGroupList()],
+                    ),
           ),
         ],
       ),
@@ -348,7 +377,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  PreferredSizeWidget _buildAppBar() {
+  PreferredSizeWidget _buildAppBar(
+    bool hasCurrentUserProfileUrl,
+    String? currentUserProfileUrl,
+  ) {
     return AppBar(
       flexibleSpace: Container(
         decoration: BoxDecoration(
@@ -369,18 +401,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             color: Colors.white,
           ),
           IconButton(
-            icon: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 1.5),
-              ),
-              child: const Icon(Icons.person, color: Colors.white),
+            icon: CircleAvatar(
+              radius: 18,
+              backgroundColor: Colors.white.withAlpha(50),
+              backgroundImage:
+                  hasCurrentUserProfileUrl
+                      ? CachedNetworkImageProvider(currentUserProfileUrl!)
+                      : null,
+              child:
+                  !hasCurrentUserProfileUrl
+                      ? const Icon(Icons.person, size: 22, color: Colors.white)
+                      : null,
             ),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => SettingScreen(onLogout: widget.onLogout)),
-            ),
+            onPressed:
+                () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => SettingScreen(onLogout: widget.onLogout),
+                  ),
+                ).then((_) => _loadUserData()),
           ),
         ],
       ),
@@ -391,94 +430,101 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Widget _buildChatList() {
     // Filter chats based on search query
-    final filteredChats = _searchQuery.isEmpty
-        ? _chats
-        : _chats.where((chat) =>
-            chat['name'].toString().toLowerCase().contains(_searchQuery) ||
-            chat['message'].toString().toLowerCase().contains(_searchQuery)).toList();
-    
+    final filteredChats =
+        _searchQuery.isEmpty
+            ? _chats
+            : _chats.where((chat) {
+              final name = chat['name']?.toString().toLowerCase() ?? '';
+              final message = chat['message']?.toString().toLowerCase() ?? '';
+              return name.contains(_searchQuery) ||
+                  message.contains(_searchQuery);
+            }).toList();
+
     return Stack(
       children: [
         filteredChats.isEmpty
             ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.chat_bubble_outline,
-                      size: 70,
-                      color: Colors.grey[300],
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.chat_bubble_outline,
+                    size: 70,
+                    color: Colors.grey[300],
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'No chats yet',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey,
                     ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'No chats yet',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Start chatting with people',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey,
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            : ListView.separated(
-                padding: const EdgeInsets.only(top: 8, bottom: 80), // Add padding at bottom for FAB
-                itemCount: filteredChats.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final chat = filteredChats[index];
-                  return ListTile(
-                    leading: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: _getUserColor(index),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.person,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                    title: Text(
-                      chat['name'] ?? 'Unknown',
-                      style: const TextStyle(fontWeight: FontWeight.w500),
-                    ),
-                    subtitle: Text(
-                      chat['message'] ?? '',
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    trailing: Text(
-                      chat['time'] ?? '',
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 12,
-                      ),
-                    ),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => ChatScreen(
-                            userName: chat['name'] ?? 'Unknown',
-                            userIndex: index,
-                            userEmail: chat['email'],
-                          ),
-                        ),
-                      ).then((_) => _fetchData());
-                    },
-                  );
-                },
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Start chatting with people',
+                    style: TextStyle(fontSize: 14, color: Colors.grey),
+                  ),
+                ],
               ),
+            )
+            : ListView.separated(
+              padding: const EdgeInsets.only(top: 8, bottom: 80),
+              itemCount: filteredChats.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final chat = filteredChats[index];
+                final profileUrl = chat['profileUrl'] as String?;
+                final hasProfileUrl =
+                    profileUrl != null && profileUrl.isNotEmpty;
+
+                return ListTile(
+                  leading: CircleAvatar(
+                    radius: 24,
+                    backgroundColor: _getUserColor(index),
+                    backgroundImage:
+                        hasProfileUrl
+                            ? CachedNetworkImageProvider(profileUrl)
+                            : null,
+                    child:
+                        !hasProfileUrl
+                            ? const Icon(
+                              Icons.person,
+                              color: Colors.white,
+                              size: 24,
+                            )
+                            : null,
+                  ),
+                  title: Text(
+                    chat['name'] ?? 'Unknown',
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  subtitle: Text(
+                    chat['message'] ?? '',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Text(
+                    chat['time'] ?? '',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder:
+                            (_) => ChatScreen(
+                              userName: chat['name'] ?? 'Unknown',
+                              userIndex: index,
+                              userEmail: chat['email'],
+                              profileUrl: profileUrl,
+                            ),
+                      ),
+                    ).then((_) => _fetchData());
+                  },
+                );
+              },
+            ),
         Positioned(
           right: 16,
           bottom: 16,
@@ -503,91 +549,92 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Widget _buildGroupList() {
     // Filter groups based on search query
-    final filteredGroups = _searchQuery.isEmpty
-        ? _groups
-        : _groups.where((group) =>
-            group['name'].toString().toLowerCase().contains(_searchQuery)).toList();
-    
+    final filteredGroups =
+        _searchQuery.isEmpty
+            ? _groups
+            : _groups.where((group) {
+              final name = group['name']?.toString().toLowerCase() ?? '';
+              return name.contains(_searchQuery);
+            }).toList();
+
     return Stack(
       children: [
         filteredGroups.isEmpty
             ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.group_outlined,
-                      size: 70,
-                      color: Colors.grey[300],
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.group_outlined, size: 70, color: Colors.grey[300]),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'No groups yet',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey,
                     ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'No groups yet',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Create or join a group to chat',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey,
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            : ListView.separated(
-                padding: const EdgeInsets.only(top: 8, bottom: 80),
-                itemCount: filteredGroups.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final group = filteredGroups[index];
-                  return ListTile(
-                    leading: Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: _getUserColor(index),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.group,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                    ),
-                    title: Text(
-                      group['name'] ?? 'Unknown',
-                      style: const TextStyle(fontWeight: FontWeight.w500),
-                    ),
-                    subtitle: Text(group['members'] ?? ''),
-                    trailing: Text(
-                      group['lastActive'] ?? '',
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 12,
-                      ),
-                    ),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => GroupChatScreen(
-                            groupName: group['name'] ?? 'Unknown',
-                            members: group['members'] ?? '',
-                            groupIndex: index,
-                            groupId: group['id'],
-                          ),
-                        ),
-                      ).then((_) => _fetchData());
-                    },
-                  );
-                },
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Create or join a group to chat',
+                    style: TextStyle(fontSize: 14, color: Colors.grey),
+                  ),
+                ],
               ),
+            )
+            : ListView.separated(
+              padding: const EdgeInsets.only(top: 8, bottom: 80),
+              itemCount: filteredGroups.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final group = filteredGroups[index];
+                final groupProfileUrl = group['groupProfileUrl'] as String?;
+                final hasGroupProfileUrl =
+                    groupProfileUrl != null && groupProfileUrl.isNotEmpty;
+
+                return ListTile(
+                  leading: CircleAvatar(
+                    radius: 24,
+                    backgroundColor: _getUserColor(index + _chats.length),
+                    backgroundImage:
+                        hasGroupProfileUrl
+                            ? CachedNetworkImageProvider(groupProfileUrl)
+                            : null,
+                    child:
+                        !hasGroupProfileUrl
+                            ? const Icon(
+                              Icons.group,
+                              color: Colors.white,
+                              size: 24,
+                            )
+                            : null,
+                  ),
+                  title: Text(
+                    group['name'] ?? 'Unknown',
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  subtitle: Text(group['members'] ?? ''),
+                  trailing: Text(
+                    group['lastActive'] ?? '',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder:
+                            (_) => GroupChatScreen(
+                              groupName: group['name'] ?? 'Unknown',
+                              members: group['members'] ?? '',
+                              groupIndex: index,
+                              groupId: group['id'],
+                            ),
+                      ),
+                    ).then((_) => _fetchData());
+                  },
+                );
+              },
+            ),
         Positioned(
           right: 16,
           bottom: 16,
@@ -645,9 +692,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: _currentIndex == 0
-                      ? _primaryColor.withOpacity(0.2)
-                      : Colors.transparent,
+                  color:
+                      _currentIndex == 0
+                          ? _primaryColor.withOpacity(0.2)
+                          : Colors.transparent,
                 ),
                 child: const Icon(Icons.chat_bubble_outline),
               ),
@@ -659,9 +707,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: _currentIndex == 1
-                      ? _primaryColor.withOpacity(0.2)
-                      : Colors.transparent,
+                  color:
+                      _currentIndex == 1
+                          ? _primaryColor.withOpacity(0.2)
+                          : Colors.transparent,
                 ),
                 child: const Icon(Icons.group_outlined),
               ),

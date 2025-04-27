@@ -44,6 +44,10 @@ dependencies:
   animated_text_kit: ^4.2.2
   socket_io_client: ^2.0.3
   encrypt: ^5.0.3
+  intl: ^0.20.2
+  image_picker: ^1.1.2
+  cached_network_image: ^3.4.1
+  mime: ^2.0.0
  # Check for the latest version on pub.dev
 
 dev_dependencies:

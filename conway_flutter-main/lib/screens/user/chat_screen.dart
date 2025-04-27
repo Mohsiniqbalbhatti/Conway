@@ -5,53 +5,56 @@ import 'dart:async';
 import '../../models/user.dart';
 import '../../helpers/database_helper.dart';
 import '../../services/socket_service.dart';
-import '../../utils/crypto_helper.dart';
 import '../../constants/api_config.dart';
+import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'user_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String userName;
   final int userIndex;
   final String userEmail;
+  final String? profileUrl;
 
   const ChatScreen({
-    Key? key,
+    super.key,
     required this.userName,
     required this.userIndex,
     required this.userEmail,
-  }) : super(key: key);
+    this.profileUrl,
+  });
 
   @override
-  _ChatScreenState createState() => _ChatScreenState();
+  State<ChatScreen> createState() => ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final Color _primaryColor = const Color(0xFF19BFB7);
   final Color _secondaryColor = const Color(0xFF59A52C);
   final SocketService _socketService = SocketService();
-  
+
   List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
   User? _currentUser;
   StreamSubscription? _messageSubscription;
+  StreamSubscription? _messageExpiredSubscription;
+  StreamSubscription? _messageSentSubscription;
 
-  // --- New State Variables ---
-  bool _isBurnoutMode = false;
   DateTime? _scheduledTime;
-  Duration? _burnoutDuration;
-  // --- End New State Variables ---
+  DateTime? _burnoutTime;
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       Future.delayed(const Duration(milliseconds: 100), () {
-         if (_scrollController.hasClients) {
-           _scrollController.animateTo(
-              _scrollController.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOut,
-            );
-         }
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
       });
     }
   }
@@ -69,108 +72,285 @@ class _ChatScreenState extends State<ChatScreen> {
       _currentUser = user;
     });
     if (_currentUser != null) {
-      _socketService.connect(_currentUser!.id.toString()); 
+      _socketService.connect(_currentUser!.id.toString());
       _setupSocketListeners();
       await _fetchMessages();
     } else {
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Error: Could not load user data.')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error: Could not load user data.')),
+        );
+      }
     }
   }
 
   void _setupSocketListeners() {
-    _messageSubscription = _socketService.onMessageReceived.listen((messageData) {
-       print("[ChatScreen RECEIVE] Raw message data from socket: $messageData");
-       // ... (check if message is for current chat)
-       final receivedForEmail = messageData['receiverEmail'];
-       final senderEmail = messageData['senderEmail'];
+    _messageSubscription = _socketService.onMessageReceived.listen((
+      messageData,
+    ) {
+      debugPrint(
+        "[ChatScreen RECEIVE] Raw message data from socket: $messageData",
+      );
+      _handleReceivedMessage(messageData);
+    });
 
-       if (receivedForEmail == _currentUser?.email && senderEmail == widget.userEmail) {
-         // REMOVE decryption call
-         // final rawEncryptedText = messageData['text'] as String? ?? '';
-         // print("[ChatScreen RECEIVE] Raw encrypted text before decrypt: $rawEncryptedText");
-         // final decryptedText = CryptoHelper.decryptText(rawEncryptedText);
-         final plainText = messageData['text'] as String? ?? ''; // Use text directly
-         print("[ChatScreen RECEIVE] Plain text received: $plainText");
+    _messageExpiredSubscription = _socketService.onMessageExpired.listen((
+      messageId,
+    ) {
+      debugPrint(
+        "[ChatScreen EXPIRE] Received expiry for message ID: $messageId",
+      );
+      _handleMessageExpiry(messageId);
+    });
 
-         if (mounted) {
-            setState(() {
-              _messages.add({
-                'id': messageData['id'],
-                'senderId': messageData['senderId'],
-                'senderEmail': messageData['senderEmail'],
-                'text': plainText, // Use plain text
-                'time': messageData['time'],
-                'isMe': false, 
-              });
-            });
-            WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
-         }
+    _messageSentSubscription = _socketService.onMessageSent.listen((sentData) {
+      debugPrint("[ChatScreen SENT CONFIRM] Received confirmation: $sentData");
+      _handleMessageSentConfirmation(sentData);
+    });
+  }
+
+  void _handleReceivedMessage(Map<String, dynamic> messageData) {
+    final receivedForEmail = messageData['receiverEmail'];
+    final senderEmail = messageData['senderEmail'];
+    final messageId = messageData['id'];
+
+    if (!((receivedForEmail == _currentUser?.email &&
+            senderEmail == widget.userEmail) ||
+        (senderEmail == _currentUser?.email &&
+            receivedForEmail == widget.userEmail))) {
+      return;
+    }
+
+    if (_messages.any((msg) => msg['id'] == messageId)) {
+      debugPrint(
+        "[ChatScreen RECEIVE] Message ID $messageId already exists. Ignoring.",
+      );
+      return;
+    }
+
+    final plainText = messageData['text'] as String? ?? '';
+    final bool isBurnout = messageData['isBurnout'] as bool? ?? false;
+    final String? expireAtStr = messageData['expireAt'] as String?;
+    final bool isScheduled = messageData['isScheduled'] as bool? ?? false;
+    final String? scheduledAtStr = messageData['scheduledAt'] as String?;
+    DateTime? expireAt =
+        expireAtStr != null ? DateTime.tryParse(expireAtStr)?.toLocal() : null;
+
+    debugPrint(
+      "[ChatScreen RECEIVE] Text: $plainText, Burnout: $isBurnout, Expires: $expireAt, WasScheduled: $isScheduled",
+    );
+
+    if (isBurnout && expireAt != null && expireAt.isBefore(DateTime.now())) {
+      debugPrint("[ChatScreen RECEIVE] Burnout message expired. Ignoring.");
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _messages.add({
+          'id': messageId,
+          'senderId': messageData['senderId'],
+          'senderEmail': senderEmail,
+          'text': plainText,
+          'time': messageData['time'],
+          'isMe': senderEmail == _currentUser?.email,
+          'isBurnout': isBurnout,
+          'expireAt': expireAtStr,
+          'isScheduled': isScheduled,
+          'scheduledAt': scheduledAtStr,
+        });
+        _sortMessages();
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    }
+  }
+
+  void _handleMessageExpiry(String messageId) {
+    if (!mounted) return;
+    setState(() {
+      final index = _messages.indexWhere((msg) => msg['id'] == messageId);
+      if (index != -1) {
+        if (!_messages[index]['isMe']) {
+          debugPrint(
+            "[ChatScreen EXPIRE] Hiding expired message ID $messageId for receiver.",
+          );
+          _messages[index]['visuallyExpired'] = true;
+        } else {
+          debugPrint(
+            "[ChatScreen EXPIRE] Sender received expiry for $messageId. Keeping visible.",
+          );
+          _messages[index]['actuallyExpired'] = true;
+        }
+      } else {
+        debugPrint(
+          "[ChatScreen EXPIRE] Message ID $messageId not found in current list.",
+        );
+      }
+    });
+  }
+
+  void _handleMessageSentConfirmation(Map<String, dynamic> sentData) {
+    final tempId = sentData['tempId'] as String?;
+    final dbId = sentData['dbId'] as String?;
+    final serverTimeStr = sentData['time'] as String?;
+
+    if (tempId == null || dbId == null) {
+      debugPrint(
+        "[ChatScreen SENT CONFIRM] Invalid confirmation data (missing tempId or dbId).",
+      );
+      return;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      final index = _messages.indexWhere((msg) => msg['id'] == tempId);
+      if (index != -1) {
+        debugPrint(
+          "[ChatScreen SENT CONFIRM] Found optimistic message $tempId. Updating to ID $dbId.",
+        );
+        _messages[index]['id'] = dbId;
+        _messages[index]['isOptimistic'] = false;
+        if (serverTimeStr != null) {
+          _messages[index]['time'] = serverTimeStr;
+        }
+        _sortMessages();
+      } else {
+        debugPrint(
+          "[ChatScreen SENT CONFIRM] Optimistic message $tempId not found.",
+        );
       }
     });
   }
 
   Future<void> _fetchMessages({bool scrollToBottom = true}) async {
     if (_currentUser == null) return;
-    
+
     setState(() => _isLoading = true);
     try {
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/get-messages'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'senderEmail': _currentUser!.email,
-          'receiverEmail': widget.userEmail,
-        }),
-      ).timeout(const Duration(seconds: 10));
-      
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/get-messages'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'senderEmail': _currentUser!.email,
+              'receiverEmail': widget.userEmail,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final List<dynamic> fetchedMessages = data['messages'] ?? [];
-        print("Fetched ${fetchedMessages.length} raw messages from API: $fetchedMessages"); 
-        
-        // REMOVE decryption loop
-        final plainMessages = fetchedMessages.map((msg) {
-            // final decryptedText = CryptoHelper.decryptText(msg['text']);
-            final plainText = msg['text'] as String? ?? ''; // Use text directly
-            final bool isMe = msg['senderEmail'] == _currentUser!.email;
-            return {
-              'id': msg['id'],
-              'senderId': msg['senderId'],
-              'senderEmail': msg['senderEmail'],
-              'text': plainText, // Use plain text
-              'time': msg['time'], 
-              'isMe': isMe,
-            };
-        }).toList();
-        print("Processed ${plainMessages.length} messages: $plainMessages");
+        debugPrint("Fetched ${fetchedMessages.length} raw messages from API");
+
+        final validMessages =
+            fetchedMessages
+                .map((msg) {
+                  final plainText = msg['text'] as String? ?? '';
+                  final bool isMe = msg['senderEmail'] == _currentUser!.email;
+                  final bool isBurnout = msg['isBurnout'] as bool? ?? false;
+                  final String? expireAtStr = msg['expireAt'] as String?;
+                  final bool isScheduled = msg['isScheduled'] as bool? ?? false;
+                  final String? scheduledAtStr = msg['scheduledAt'] as String?;
+                  DateTime? expireAt =
+                      expireAtStr != null
+                          ? DateTime.tryParse(expireAtStr)?.toLocal()
+                          : null;
+
+                  if (isBurnout &&
+                      expireAt != null &&
+                      expireAt.isBefore(DateTime.now())) {
+                    if (isMe) {
+                      return {
+                        'id': msg['id'],
+                        'senderId': msg['senderId'],
+                        'senderEmail': msg['senderEmail'],
+                        'text': plainText,
+                        'time': msg['time'],
+                        'isMe': isMe,
+                        'isBurnout': isBurnout,
+                        'expireAt': expireAtStr,
+                        'isScheduled': isScheduled,
+                        'scheduledAt': scheduledAtStr,
+                        'actuallyExpired': true,
+                      };
+                    } else {
+                      return null;
+                    }
+                  }
+
+                  return {
+                    'id': msg['id'],
+                    'senderId': msg['senderId'],
+                    'senderEmail': msg['senderEmail'],
+                    'text': plainText,
+                    'time': msg['time'],
+                    'isMe': isMe,
+                    'isBurnout': isBurnout,
+                    'expireAt': expireAtStr,
+                    'isScheduled': isScheduled,
+                    'scheduledAt': scheduledAtStr,
+                    'actuallyExpired': false,
+                  };
+                })
+                .where((msg) => msg != null)
+                .toList();
+
+        debugPrint(
+          "Processed ${validMessages.length} valid messages for display",
+        );
 
         if (mounted) {
           setState(() {
-            _messages = List<Map<String, dynamic>>.from(plainMessages);
+            _messages = List<Map<String, dynamic>>.from(validMessages);
+            _sortMessages();
             _isLoading = false;
           });
         }
-        
+
         if (scrollToBottom) {
-           WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _scrollToBottom(),
+          );
         }
       } else {
-         if (mounted) setState(() => _isLoading = false);
-         print('Error fetching messages: ${response.statusCode} ${response.body}');
-         ScaffoldMessenger.of(context).showSnackBar(
-           SnackBar(content: Text('Error fetching message history: ${response.statusCode}')),
-         );
+        if (mounted) setState(() => _isLoading = false);
+        debugPrint(
+          'Error fetching messages: ${response.statusCode} ${response.body}',
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Error fetching message history: ${response.statusCode}',
+              ),
+            ),
+          );
+        }
       }
     } catch (e) {
       if (mounted) setState(() => _isLoading = false);
-      print('Error fetching messages: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Network error fetching messages: ${e.toString()}')),
-      );
+      debugPrint('Error fetching messages: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Network error fetching messages: ${e.toString()}'),
+          ),
+        );
+      }
     }
+  }
+
+  void _sortMessages() {
+    _messages.sort((a, b) {
+      final timeA = DateTime.tryParse(a['time'] ?? '');
+      final timeB = DateTime.tryParse(b['time'] ?? '');
+      if (timeA != null && timeB != null) return timeA.compareTo(timeB);
+      if (timeA == null && timeB == null) return 0;
+      return timeA == null ? -1 : 1;
+    });
   }
 
   @override
@@ -178,78 +358,74 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageController.dispose();
     _scrollController.dispose();
     _messageSubscription?.cancel();
+    _messageExpiredSubscription?.cancel();
+    _messageSentSubscription?.cancel();
     super.dispose();
   }
 
   Future<void> _sendMessage() async {
     final messageText = _messageController.text.trim();
     if (messageText.isEmpty || _currentUser == null) return;
-    
+
+    final tempId = 'optimistic_${DateTime.now().millisecondsSinceEpoch}';
     _messageController.clear();
 
-    // Read the current modes
-    final bool isBurnout = _isBurnoutMode;
-    final Duration? burnoutDur = _burnoutDuration;
-    final DateTime? schedule = _scheduledTime;
+    final DateTime? scheduleTime = _scheduledTime;
+    final DateTime? burnTime = _burnoutTime;
 
-    // Reset modes after getting the message text
     setState(() {
-      _isBurnoutMode = false;
       _scheduledTime = null;
-      _burnoutDuration = null;
+      _burnoutTime = null;
     });
 
     final plainMessageText = messageText;
 
-    // Optimistically add plain text message to UI
     final optimisticMessage = {
+      'id': tempId,
       'senderId': _currentUser!.id.toString(),
       'senderEmail': _currentUser!.email,
-      'text': plainMessageText, 
-      'time': DateTime.now().toIso8601String(),
+      'text': plainMessageText,
+      'time': DateTime.now().toUtc().toIso8601String(),
       'isMe': true,
+      'isBurnout': burnTime != null,
+      'expireAt': burnTime?.toUtc().toIso8601String(),
+      'isScheduled': scheduleTime != null,
+      'scheduledAt': scheduleTime?.toUtc().toIso8601String(),
+      'isOptimistic': true,
     };
-    
+
     if (mounted) {
       setState(() {
         _messages.add(optimisticMessage);
+        _sortMessages();
       });
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
-    
-    // Send plain text message via SocketService (will need modification later)
-    print("[ChatScreen SEND] Mode - Burnout: $isBurnout ($burnoutDur), Scheduled: $schedule"); // Updated log
+
+    debugPrint(
+      "[ChatScreen SEND] Burnout: ${burnTime?.toIso8601String()}, Scheduled: ${scheduleTime?.toIso8601String()}",
+    );
+
     _socketService.sendMessage(
-      _currentUser!.id.toString(),
-      _currentUser!.email,
-      widget.userEmail,
-      plainMessageText, // Send plain text for now
-      // TODO: Pass isBurnout, burnoutDuration, schedule flags/time later
+      senderId: _currentUser!.id.toString(),
+      senderEmail: _currentUser!.email,
+      receiverEmail: widget.userEmail,
+      plainMessageText: plainMessageText,
+      tempId: tempId,
+      burnoutDateTime: burnTime?.toUtc(),
+      scheduleDateTime: scheduleTime?.toUtc(),
     );
   }
 
   String _formatTime(String? timeString) {
     if (timeString == null) return '';
-
     try {
-      // Parse the ISO 8601 string (likely UTC from server)
       final DateTime utcTime = DateTime.parse(timeString);
-      // Convert to local time zone
       final DateTime localTime = utcTime.toLocal();
-
-      // Format as 12-hour time with AM/PM (e.g., 5:53 PM)
-      int hour = localTime.hour;
-      final String minute = localTime.minute.toString().padLeft(2, '0');
-      final String period = hour < 12 ? 'AM' : 'PM';
-      if (hour == 0) { // Handle midnight
-        hour = 12;
-      } else if (hour > 12) {
-        hour -= 12;
-      }
-      return '$hour:$minute $period';
+      return DateFormat.jm().format(localTime);
     } catch (e) {
-      print("Error formatting time in ChatScreen '$timeString': $e");
-      return ''; // Return empty on error
+      debugPrint("Error formatting time in ChatScreen '$timeString': $e");
+      return '';
     }
   }
 
@@ -265,6 +441,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bool hasProfileUrl =
+        widget.profileUrl != null && widget.profileUrl!.isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: Container(
@@ -280,31 +459,49 @@ class _ChatScreenState extends State<ChatScreen> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: _getUserColor(widget.userIndex),
-                shape: BoxShape.circle,
+        title: GestureDetector(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder:
+                    (context) => UserProfileScreen(
+                      userName: widget.userName,
+                      userEmail: widget.userEmail,
+                      profileUrl: widget.profileUrl,
+                    ),
               ),
-              child: const Icon(
-                Icons.person,
-                color: Colors.white,
-                size: 20,
+            );
+          },
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 20,
+                backgroundColor: _getUserColor(widget.userIndex),
+                backgroundImage:
+                    hasProfileUrl
+                        ? CachedNetworkImageProvider(widget.profileUrl!)
+                        : null,
+                child:
+                    !hasProfileUrl
+                        ? const Icon(
+                          Icons.person,
+                          color: Colors.white,
+                          size: 20,
+                        )
+                        : null,
               ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              widget.userName,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w500,
+              const SizedBox(width: 10),
+              Text(
+                widget.userName,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
         actions: [
           IconButton(
@@ -322,67 +519,69 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
       body: Container(
-        decoration: BoxDecoration(
-          color: Colors.grey[100],
-        ),
+        decoration: BoxDecoration(color: Colors.grey[100]),
         child: Column(
           children: [
             Expanded(
-              child: _isLoading
-                  ? Center(child: CircularProgressIndicator(color: _primaryColor))
-                  : _messages.isEmpty
+              child:
+                  _isLoading
                       ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.chat_bubble_outline,
-                                size: 70,
-                                color: Colors.grey[300],
+                        child: CircularProgressIndicator(color: _primaryColor),
+                      )
+                      : _messages.isEmpty
+                      ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.chat_bubble_outline,
+                              size: 70,
+                              color: Colors.grey[300],
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'No messages yet',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey,
                               ),
-                              const SizedBox(height: 16),
-                              const Text(
-                                'No messages yet',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey,
-                                ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'Start the conversation!',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey,
                               ),
-                              const SizedBox(height: 8),
-                              const Text(
-                                'Start the conversation!',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
+                            ),
+                          ],
+                        ),
+                      )
                       : ListView.builder(
-                controller: _scrollController,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 20),
-                          itemCount: _messages.length,
-                itemBuilder: (context, index) {
-                            final message = _messages[index];
-                            final isMe = message['isMe'] ?? (message['senderEmail'] == _currentUser?.email);
-                  
-                  return _buildMessageBubble(
-                              message: message['text'] ?? '',
-                              time: _formatTime(message['time']),
-                    isMe: isMe,
-                  );
-                },
-              ),
+                        controller: _scrollController,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 20,
+                        ),
+                        itemCount: _messages.length,
+                        itemBuilder: (context, index) {
+                          final message = _messages[index];
+
+                          if (message['visuallyExpired'] == true) {
+                            return const SizedBox.shrink();
+                          }
+
+                          return _buildMessageBubble(messageData: message);
+                        },
+                      ),
             ),
-            
             Container(
               decoration: BoxDecoration(
                 color: Colors.white,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.grey.withOpacity(0.2),
+                    color: Colors.grey.withAlpha(51),
                     spreadRadius: 1,
                     blurRadius: 5,
                     offset: const Offset(0, -1),
@@ -391,47 +590,60 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               child: Column(
-                mainAxisSize: MainAxisSize.min, // Fit content vertically
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Show scheduled time if set
-                  if (_scheduledTime != null)
+                  if (_scheduledTime != null || _burnoutTime != null)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 4.0),
+                      padding: const EdgeInsets.only(left: 12.0, bottom: 4.0),
                       child: Text(
-                        'Scheduled for: ${_formatScheduleTime(_scheduledTime)}',
-                        style: TextStyle(color: Colors.blue[700], fontSize: 12),
+                        _scheduledTime != null
+                            ? 'Scheduled: ${_formatDateTimeUserFriendly(_scheduledTime)}'
+                            : 'Expires: ${_formatDateTimeUserFriendly(_burnoutTime)}',
+                        style: TextStyle(
+                          color:
+                              _scheduledTime != null
+                                  ? Colors.blue[700]
+                                  : Colors.orange[700],
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
-                  // Show burnout duration if set
-                  if (_isBurnoutMode && _burnoutDuration != null)
-                     Padding(
-                       padding: const EdgeInsets.only(bottom: 4.0),
-                       child: Text(
-                         'Burnout Enabled: Expires in ${_burnoutDuration!.inSeconds}s',
-                         style: TextStyle(color: Colors.orange[700], fontSize: 12),
-                       ),
-                     ),
                   Row(
                     children: [
-                      // --- Burnout Mode Button ---
                       IconButton(
                         icon: Icon(
-                          Icons.local_fire_department_outlined,
-                          color: _isBurnoutMode ? Colors.orange[700] : Colors.grey[600],
+                          _burnoutTime != null
+                              ? Icons.local_fire_department
+                              : Icons.local_fire_department_outlined,
+                          color:
+                              _burnoutTime != null
+                                  ? Colors.orange[700]
+                                  : Colors.grey[600],
                         ),
-                        tooltip: 'Configure Burnout Mode',
-                        onPressed: _showBurnoutDialog,
+                        tooltip:
+                            _burnoutTime == null
+                                ? 'Set message expiry'
+                                : 'Cancel expiry',
+                        onPressed: _handleBurnoutTap,
                       ),
-                      // --- Schedule Message Button ---
                       IconButton(
                         icon: Icon(
-                          Icons.schedule_outlined,
-                          color: _scheduledTime != null ? Colors.blue[700] : Colors.grey[600],
+                          _scheduledTime != null
+                              ? Icons.alarm_on
+                              : Icons.schedule_outlined,
+                          color:
+                              _scheduledTime != null
+                                  ? Colors.blue[700]
+                                  : Colors.grey[600],
                         ),
-                        tooltip: _scheduledTime == null ? 'Schedule Message' : 'Cancel Schedule',
+                        tooltip:
+                            _scheduledTime == null
+                                ? 'Schedule message'
+                                : 'Cancel schedule',
                         onPressed: _handleScheduleTap,
                       ),
-                      // --- Text Input Field ---
                       Expanded(
                         child: TextField(
                           controller: _messageController,
@@ -451,10 +663,10 @@ class _ChatScreenState extends State<ChatScreen> {
                           ),
                           textCapitalization: TextCapitalization.sentences,
                           maxLines: null,
+                          onSubmitted: (_) => _sendMessage(),
                         ),
                       ),
                       const SizedBox(width: 8),
-                      // --- Send Button ---
                       GestureDetector(
                         onTap: _sendMessage,
                         child: Container(
@@ -485,245 +697,351 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildMessageBubble({
-    required String message,
-    required String time,
-    required bool isMe,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (!isMe)
-            Container(
-              width: 30,
-              height: 30,
-              margin: const EdgeInsets.only(right: 8, bottom: 5),
-              decoration: BoxDecoration(
-                color: _getUserColor(widget.userIndex),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.person,
-                color: Colors.white,
-                size: 16,
-              ),
-            ),
-          Flexible(
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.7,
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
-              decoration: BoxDecoration(
-                color: isMe
-                    ? _primaryColor
-                    : Colors.white,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(18),
-                  topRight: const Radius.circular(18),
-                  bottomLeft: isMe ? const Radius.circular(18) : Radius.zero,
-                  bottomRight: isMe ? Radius.zero : const Radius.circular(18),
+  Widget _buildMessageBubble({required Map<String, dynamic> messageData}) {
+    final String message = messageData['text'] ?? '';
+    final String time = _formatTime(messageData['time']);
+    final bool isMe = messageData['isMe'] ?? false;
+    final bool isBurnout = messageData['isBurnout'] ?? false;
+    final String? expireAtStr = messageData['expireAt'];
+    final bool isScheduled = messageData['isScheduled'] ?? false;
+    final String? scheduledAtStr = messageData['scheduledAt'];
+    final bool isOptimistic = messageData['isOptimistic'] ?? false;
+    final bool actuallyExpired = messageData['actuallyExpired'] ?? false;
+
+    final bool isPendingSchedule =
+        isMe &&
+        isScheduled &&
+        scheduledAtStr != null &&
+        (DateTime.tryParse(scheduledAtStr)?.isAfter(DateTime.now()) ?? false);
+
+    return GestureDetector(
+      onLongPress: () => _showMessageDetailsDialog(messageData),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Opacity(
+          opacity: isOptimistic ? 0.7 : 1.0,
+          child: Row(
+            mainAxisAlignment:
+                isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (!isMe)
+                Container(
+                  width: 30,
+                  height: 30,
+                  margin: const EdgeInsets.only(right: 8, bottom: 5),
+                  decoration: BoxDecoration(
+                    color: _getUserColor(widget.userIndex),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.person,
+                    color: Colors.white,
+                    size: 16,
+                  ),
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withOpacity(0.1),
-                    spreadRadius: 1,
-                    blurRadius: 1,
-                    offset: const Offset(0, 1),
+              Flexible(
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxWidth: MediaQuery.of(context).size.width * 0.7,
                   ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    message,
-                    style: TextStyle(
-                      color: isMe ? Colors.white : Colors.black87,
-                      fontSize: 16,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 15,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isMe ? _primaryColor : Colors.white,
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(18),
+                      topRight: const Radius.circular(18),
+                      bottomLeft:
+                          isMe ? const Radius.circular(18) : Radius.zero,
+                      bottomRight:
+                          isMe ? Radius.zero : const Radius.circular(18),
                     ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.withAlpha(26),
+                        spreadRadius: 1,
+                        blurRadius: 1,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    time,
-                    style: TextStyle(
-                      color: isMe ? Colors.white70 : Colors.grey[600],
-                      fontSize: 12,
-                    ),
+                  child: Column(
+                    crossAxisAlignment:
+                        isMe
+                            ? CrossAxisAlignment.end
+                            : CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        message,
+                        style: TextStyle(
+                          color: isMe ? Colors.white : Colors.black87,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isPendingSchedule)
+                            Icon(
+                              Icons.alarm,
+                              size: 14,
+                              color: isMe ? Colors.white70 : Colors.blue[700],
+                            ),
+                          if (isPendingSchedule) const SizedBox(width: 4),
+                          if (isBurnout)
+                            Icon(
+                              Icons.local_fire_department,
+                              size: 14,
+                              color:
+                                  actuallyExpired
+                                      ? (isMe
+                                          ? Colors.white54
+                                          : Colors.grey[500])
+                                      : (isMe
+                                          ? Colors.white70
+                                          : Colors.orange[700]),
+                            ),
+                          if (isBurnout) const SizedBox(width: 4),
+                          Text(
+                            time,
+                            style: TextStyle(
+                              color: isMe ? Colors.white70 : Colors.grey[600],
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
+              if (isMe)
+                Container(
+                  width: 18,
+                  height: 18,
+                  margin: const EdgeInsets.only(left: 5, bottom: 5),
+                  child: Icon(
+                    isOptimistic ? Icons.access_time : Icons.done_all,
+                    color: _primaryColor,
+                    size: 16,
+                  ),
+                ),
+            ],
           ),
-          if (isMe)
-            Container(
-              width: 18,
-              height: 18,
-              margin: const EdgeInsets.only(left: 5, bottom: 5),
-              child: Icon(
-                Icons.done_all,
-                color: _primaryColor,
-                size: 16,
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
 
-  // --- Helper Methods ---
+  void _showMessageDetailsDialog(Map<String, dynamic> messageData) {
+    final bool isMe = messageData['isMe'] ?? false;
+    final bool isBurnout = messageData['isBurnout'] ?? false;
+    final String? expireAtStr = messageData['expireAt'];
+    final bool isScheduled = messageData['isScheduled'] ?? false;
+    final String? scheduledAtStr = messageData['scheduledAt'];
+    final bool actuallyExpired = messageData['actuallyExpired'] ?? false;
+
+    DateTime? expireAt =
+        expireAtStr != null ? DateTime.tryParse(expireAtStr)?.toLocal() : null;
+    DateTime? scheduledAt =
+        scheduledAtStr != null
+            ? DateTime.tryParse(scheduledAtStr)?.toLocal()
+            : null;
+
+    String title = "Message Details";
+    List<Widget> content = [];
+    final now = DateTime.now();
+
+    if (isScheduled && isMe && scheduledAt != null) {
+      if (scheduledAt.isAfter(now)) {
+        title = "Scheduled Message";
+        content.add(Text("This message is scheduled to be sent on:"));
+      } else {
+        title = "Sent Scheduled Message";
+        content.add(Text("This message was scheduled and sent around:"));
+      }
+      content.add(SizedBox(height: 8));
+      content.add(
+        Text(
+          _formatDateTimeUserFriendly(scheduledAt),
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+      );
+    } else if (isBurnout) {
+      if (isMe) {
+        if (actuallyExpired && expireAt != null) {
+          title = "Expired Message";
+          content.add(Text("This message expired for the receiver on:"));
+          content.add(SizedBox(height: 8));
+          content.add(
+            Text(
+              _formatDateTimeUserFriendly(expireAt),
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          );
+        } else if (expireAt != null && expireAt.isAfter(now)) {
+          title = "Burnout Message";
+          content.add(Text("This message will expire for the receiver on:"));
+          content.add(SizedBox(height: 8));
+          content.add(
+            Text(
+              _formatDateTimeUserFriendly(expireAt),
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          );
+        } else {
+          title = "Message Status";
+          content.add(Text("Burnout status is unclear for this message."));
+        }
+      } else {
+        if (expireAt != null && expireAt.isAfter(now)) {
+          title = "Burnout Message";
+          content.add(Text("This message will expire on:"));
+          content.add(SizedBox(height: 8));
+          content.add(
+            Text(
+              _formatDateTimeUserFriendly(expireAt),
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          );
+        } else {
+          title = "Expired Message";
+          content.add(Text("This message has expired."));
+        }
+      }
+    } else {
+      content.add(Text("This is a standard message."));
+      final String? timeStr = messageData['time'];
+      final DateTime? sentTime =
+          timeStr != null ? DateTime.tryParse(timeStr)?.toLocal() : null;
+      if (sentTime != null) {
+        content.add(SizedBox(height: 8));
+        content.add(Text("Sent: ${_formatDateTimeUserFriendly(sentTime)}"));
+      }
+    }
+
+    if (content.isEmpty) return;
+
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Text(title),
+            content: SingleChildScrollView(child: ListBody(children: content)),
+            actions: [
+              TextButton(
+                child: Text("OK"),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+    );
+  }
+
+  Future<DateTime?> _selectDateTime(
+    BuildContext context,
+    DateTime initialDateTime,
+  ) async {
+    final DateTime? pickedDate = await showDatePicker(
+      context: context,
+      initialDate: initialDateTime,
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
+    );
+
+    if (pickedDate != null && mounted) {
+      final TimeOfDay? pickedTime = await showTimePicker(
+        context: context,
+        initialTime: TimeOfDay.fromDateTime(initialDateTime),
+      );
+
+      if (pickedTime != null && mounted) {
+        final selectedDateTime = DateTime(
+          pickedDate.year,
+          pickedDate.month,
+          pickedDate.day,
+          pickedTime.hour,
+          pickedTime.minute,
+        );
+
+        if (selectedDateTime.isAfter(DateTime.now())) {
+          return selectedDateTime;
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Selected time must be in the future.'),
+              ),
+            );
+          }
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
   void _handleScheduleTap() async {
     if (_scheduledTime != null) {
-      // Cancel existing schedule
       setState(() {
         _scheduledTime = null;
       });
     } else {
-      // Show date & time picker
-      final now = DateTime.now();
-      final DateTime? pickedDate = await showDatePicker(
-        context: context,
-        initialDate: now,
-        firstDate: now, // Can only schedule for future
-        lastDate: now.add(const Duration(days: 365)), // Limit to 1 year
+      final initialTime = DateTime.now().add(const Duration(minutes: 10));
+      final DateTime? selectedTime = await _selectDateTime(
+        context,
+        initialTime,
       );
 
-      if (pickedDate != null && mounted) {
-        final TimeOfDay? pickedTime = await showTimePicker(
-          context: context,
-          initialTime: TimeOfDay.fromDateTime(now.add(const Duration(minutes: 5))), // Default to 5 mins from now
-        );
-
-        if (pickedTime != null) {
-          final selectedDateTime = DateTime(
-            pickedDate.year,
-            pickedDate.month,
-            pickedDate.day,
-            pickedTime.hour,
-            pickedTime.minute,
-          );
-
-          // Ensure the selected time is in the future
-          if (selectedDateTime.isAfter(DateTime.now())) {
-            setState(() {
-              _scheduledTime = selectedDateTime;
-              _isBurnoutMode = false; // Deactivate burnout mode
-              _burnoutDuration = null; // Clear burnout duration
-            });
-          } else {
-            // Show error if time is in the past
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Scheduled time must be in the future.')),
-            );
-          }
-        }
+      if (selectedTime != null) {
+        setState(() {
+          _scheduledTime = selectedTime;
+          _burnoutTime = null;
+        });
       }
     }
   }
 
-  String _formatScheduleTime(DateTime? time) {
-    if (time == null) return '';
-    // Use a more detailed format for scheduled time
-    final day = time.day.toString().padLeft(2, '0');
-    final month = time.month.toString().padLeft(2, '0');
-    final year = time.year;
-    int hour = time.hour;
-    final minute = time.minute.toString().padLeft(2, '0');
-    final period = hour < 12 ? 'AM' : 'PM';
-    if (hour == 0) hour = 12;
-    if (hour > 12) hour -= 12;
-    return '$day/$month/$year $hour:$minute $period';
+  void _handleBurnoutTap() async {
+    if (_burnoutTime != null) {
+      setState(() {
+        _burnoutTime = null;
+      });
+    } else {
+      final initialTime = DateTime.now().add(const Duration(hours: 1));
+      final DateTime? selectedTime = await _selectDateTime(
+        context,
+        initialTime,
+      );
+
+      if (selectedTime != null) {
+        setState(() {
+          _burnoutTime = selectedTime;
+          _scheduledTime = null;
+        });
+      }
+    }
   }
 
-  // --- New Burnout Dialog Method ---
-  void _showBurnoutDialog() {
-    // Temporary variables to hold dialog state
-    bool tempIsEnabled = _isBurnoutMode;
-    Duration tempDuration = _burnoutDuration ?? const Duration(seconds: 10); // Default if null
-    final List<Duration> availableDurations = [
-      const Duration(seconds: 5),
-      const Duration(seconds: 10),
-      const Duration(seconds: 30),
-      const Duration(minutes: 1),
-    ];
+  String _formatDateTimeUserFriendly(DateTime? time) {
+    if (time == null) return '';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final tomorrow = today.add(const Duration(days: 1));
+    final targetDay = DateTime(time.year, time.month, time.day);
 
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text('Configure Burnout Mode'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  SwitchListTile(
-                    title: const Text('Enable Burnout'),
-                    value: tempIsEnabled,
-                    onChanged: (bool value) {
-                      setDialogState(() {
-                        tempIsEnabled = value;
-                      });
-                    },
-                    activeColor: _primaryColor,
-                  ),
-                  if (tempIsEnabled)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8.0, left: 16.0, right: 16.0),
-                      child: DropdownButtonFormField<Duration>(
-                        value: tempDuration,
-                        items: availableDurations.map((duration) {
-                          return DropdownMenuItem<Duration>(
-                            value: duration,
-                            child: Text('${duration.inSeconds} seconds'),
-                          );
-                        }).toList(),
-                        onChanged: (Duration? newValue) {
-                          if (newValue != null) {
-                             setDialogState(() {
-                                tempDuration = newValue;
-                             });
-                          }
-                        },
-                        decoration: const InputDecoration(
-                          labelText: 'Expire after',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              actions: <Widget>[
-                TextButton(
-                  child: const Text('Cancel'),
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                  },
-                ),
-                TextButton(
-                  child: const Text('Set'),
-                  onPressed: () {
-                    // Update the main screen state
-                    setState(() {
-                      _isBurnoutMode = tempIsEnabled;
-                      if (_isBurnoutMode) {
-                        _burnoutDuration = tempDuration;
-                        _scheduledTime = null; // Deactivate schedule mode
-                      } else {
-                        _burnoutDuration = null;
-                      }
-                    });
-                    Navigator.of(context).pop();
-                  },
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
+    String dayStr;
+    if (targetDay == today) {
+      dayStr = 'Today';
+    } else if (targetDay == tomorrow) {
+      dayStr = 'Tomorrow';
+    } else {
+      dayStr = DateFormat.MMMd().format(time);
+    }
+    return '$dayStr, ${DateFormat.jm().format(time)}';
   }
 }

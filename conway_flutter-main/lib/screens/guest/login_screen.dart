@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:conway/helpers/database_helper.dart';
 import 'package:conway/models/user.dart'
-as conway_user; // Aliased to avoid conflict
+    as conway_user; // Aliased to avoid conflict
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
@@ -21,7 +21,7 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _emailOrUsernameController =
-  TextEditingController();
+      TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = false;
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -37,7 +37,8 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _login() async {
     setState(() => _isLoading = true);
 
-    final emailOrUsername = _emailOrUsernameController.text.trim();
+    final emailOrUsername =
+        _emailOrUsernameController.text.trim().toLowerCase();
     final password = _passwordController.text;
 
     if (emailOrUsername.isEmpty || password.isEmpty) {
@@ -51,23 +52,30 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     try {
-      final response = await http.post(
-        Uri.parse(ApiConfig.login),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"identifier": emailOrUsername, "password": password}),
-      ).timeout(
-        const Duration(seconds: 15),
-        onTimeout: () {
-          throw TimeoutException('Connection timed out. Server might be unreachable.');
-        },
-      );
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.login),
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({
+              "identifier": emailOrUsername,
+              "password": password,
+            }),
+          )
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () {
+              throw TimeoutException(
+                'Connection timed out. Server might be unreachable.',
+              );
+            },
+          );
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(response.body);
         final Map<String, dynamic> userJson = body['user'];
-        
+
         final String userIdString = userJson['_id'] as String;
-        
+
         final userFromServer = conway_user.User(
           id: userIdString,
           email: userJson['email'] as String? ?? '',
@@ -77,7 +85,9 @@ class _LoginScreenState extends State<LoginScreen> {
         await DBHelper().insertUser(userFromServer);
 
         // *** Connect Socket ***
-        print("[LoginScreen] Connecting socket after regular login for user: ${userFromServer.id}");
+        print(
+          "[LoginScreen] Connecting socket after regular login for user: ${userFromServer.id}",
+        );
         _socketService.connect(userFromServer.id);
         // ********************
 
@@ -95,27 +105,29 @@ class _LoginScreenState extends State<LoginScreen> {
         Navigator.pushReplacementNamed(context, '/home');
       } else {
         final Map<String, dynamic> errorData = jsonDecode(response.body);
-        final String errorMessage = errorData['message'] ?? 'Login failed. Check your credentials.';
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(errorMessage)),
-        );
+        final String errorMessage =
+            errorData['message'] ?? 'Login failed. Check your credentials.';
+
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(errorMessage)));
       }
     } catch (e) {
       print('Login error details: $e');
-      
+
       String errorMessage = "Network error occurred. Please try again.";
-      
-      if (e.toString().contains('SocketException') || 
+
+      if (e.toString().contains('SocketException') ||
           e.toString().contains('Connection refused') ||
           e.toString().contains('Network is unreachable')) {
-        errorMessage = 'Cannot connect to server. Check your network connection and server address.';
+        errorMessage =
+            'Cannot connect to server. Check your network connection and server address.';
       } else if (e.toString().contains('timed out')) {
         errorMessage = 'Connection timed out. Server might be unreachable.';
       } else if (e is FormatException) {
         errorMessage = 'Invalid response from server. Please try again.';
       }
-      
+
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(errorMessage)));
@@ -135,7 +147,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       final GoogleSignInAuthentication googleAuth =
-      await googleUser.authentication;
+          await googleUser.authentication;
       final AuthCredential credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
@@ -147,28 +159,32 @@ class _LoginScreenState extends State<LoginScreen> {
       final User? firebaseUser = userCredential.user;
 
       if (firebaseUser != null) {
-        final response = await http.post(
-          Uri.parse(ApiConfig.googleAuth),
-          headers: {"Content-Type": "application/json"},
-          body: jsonEncode({
-            "email": firebaseUser.email,
-            "fullname": firebaseUser.displayName,
-            "photoURL": firebaseUser.photoURL,
-            "firebaseUID": firebaseUser.uid
-          }),
-        ).timeout(
-          const Duration(seconds: 15),
-          onTimeout: () {
-            throw TimeoutException('Connection timed out. Server might be unreachable.');
-          },
-        );
+        final response = await http
+            .post(
+              Uri.parse(ApiConfig.googleAuth),
+              headers: {"Content-Type": "application/json"},
+              body: jsonEncode({
+                "email": firebaseUser.email,
+                "fullname": firebaseUser.displayName,
+                "photoURL": firebaseUser.photoURL,
+                "firebaseUID": firebaseUser.uid,
+              }),
+            )
+            .timeout(
+              const Duration(seconds: 15),
+              onTimeout: () {
+                throw TimeoutException(
+                  'Connection timed out. Server might be unreachable.',
+                );
+              },
+            );
 
         if (response.statusCode == 200 || response.statusCode == 201) {
           final Map<String, dynamic> responseData = jsonDecode(response.body);
           final Map<String, dynamic> userJson = responseData['user'];
-          
+
           final String userIdString = userJson['_id'] as String;
-          
+
           final user = conway_user.User(
             id: userIdString,
             email: userJson['email'] as String? ?? '',
@@ -176,19 +192,23 @@ class _LoginScreenState extends State<LoginScreen> {
           );
 
           await DBHelper().insertUser(user);
-          
+
           // *** Connect Socket ***
-          print("[LoginScreen] Connecting socket after Google sign-in for user: ${user.id}");
+          print(
+            "[LoginScreen] Connecting socket after Google sign-in for user: ${user.id}",
+          );
           _socketService.connect(user.id);
           // ********************
-          
+
           widget.onLogin(user);
 
-          final bool isExistingAccount = responseData['isExistingAccount'] ?? false;
-          final String message = isExistingAccount 
-              ? "Logged in to your existing account" 
-              : "Google login successful!";
-              
+          final bool isExistingAccount =
+              responseData['isExistingAccount'] ?? false;
+          final String message =
+              isExistingAccount
+                  ? "Logged in to your existing account"
+                  : "Google login successful!";
+
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(message),
@@ -196,32 +216,35 @@ class _LoginScreenState extends State<LoginScreen> {
               behavior: SnackBarBehavior.floating,
             ),
           );
-          
+
           await Future.delayed(const Duration(milliseconds: 1500));
 
           Navigator.pushReplacementNamed(context, '/home');
         } else {
-          throw Exception("Server returned ${response.statusCode}: ${response.body}");
+          throw Exception(
+            "Server returned ${response.statusCode}: ${response.body}",
+          );
         }
       }
     } catch (e) {
       print('Google sign-in error details: $e');
-      
+
       String errorMessage = "Google sign in failed. Please try again.";
-      
-      if (e.toString().contains('SocketException') || 
+
+      if (e.toString().contains('SocketException') ||
           e.toString().contains('Connection refused') ||
           e.toString().contains('Network is unreachable')) {
-        errorMessage = 'Cannot connect to server. Check your network connection and server address.';
+        errorMessage =
+            'Cannot connect to server. Check your network connection and server address.';
       } else if (e.toString().contains('timed out')) {
         errorMessage = 'Connection timed out. Server might be unreachable.';
       } else if (e is FormatException) {
         errorMessage = 'Invalid response from server. Please try again.';
       }
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(errorMessage)),
-      );
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(errorMessage)));
     } finally {
       setState(() => _isLoading = false);
     }
@@ -287,10 +310,10 @@ class _LoginScreenState extends State<LoginScreen> {
           child: ShaderMask(
             shaderCallback:
                 (bounds) => LinearGradient(
-              colors: [_logoTextColor, _secondaryColor],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-            ).createShader(bounds),
+                  colors: [_logoTextColor, _secondaryColor],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                ).createShader(bounds),
             child: const Text(
               "Welcome Back",
               key: ValueKey('welcome-text'),
@@ -383,23 +406,23 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
         child:
-        _isLoading
-            ? const SizedBox(
-          height: 20,
-          width: 20,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            color: Colors.white,
-          ),
-        )
-            : const Text(
-          "Login",
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
-        ),
+            _isLoading
+                ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+                : const Text(
+                  "Login",
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
       ),
     );
   }
@@ -449,12 +472,13 @@ class _LoginScreenState extends State<LoginScreen> {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => SignupScreen(
-                  toggleView: () {
-                    // When signup is complete, pop back to login screen
-                    Navigator.pop(context);
-                  },
-                ),
+                builder:
+                    (_) => SignupScreen(
+                      toggleView: () {
+                        // When signup is complete, pop back to login screen
+                        Navigator.pop(context);
+                      },
+                    ),
               ),
             );
           },
