@@ -11,7 +11,7 @@ class CustomTextField extends StatefulWidget {
   final Widget? prefixIcon;
 
   const CustomTextField({
-    Key? key,
+    super.key,
     required this.controller,
     required this.hintText,
     this.isPassword = false,
@@ -19,7 +19,7 @@ class CustomTextField extends StatefulWidget {
     this.keyboardType,
     this.textInputAction,
     this.prefixIcon,
-  }) : super(key: key);
+  });
 
   @override
   State<CustomTextField> createState() => _CustomTextFieldState();

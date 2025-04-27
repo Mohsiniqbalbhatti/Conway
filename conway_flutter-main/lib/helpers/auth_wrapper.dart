@@ -10,12 +10,12 @@ class AuthWrapper extends StatelessWidget {
   final VoidCallback? onLogout;
 
   const AuthWrapper({
-    Key? key,
+    super.key,
     required this.isAuthenticated,
     required this.user,
     required this.onLogin,
     this.onLogout,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {

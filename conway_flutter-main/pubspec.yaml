@@ -50,6 +50,8 @@ dependencies:
   mime: ^2.0.0
  # Check for the latest version on pub.dev
 
+  path: any
+  http_parser: any
 dev_dependencies:
   flutter_test:
     sdk: flutter

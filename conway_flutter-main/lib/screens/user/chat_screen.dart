@@ -406,15 +406,21 @@ class ChatScreenState extends State<ChatScreen> {
       "[ChatScreen SEND] Burnout: ${burnTime?.toIso8601String()}, Scheduled: ${scheduleTime?.toIso8601String()}",
     );
 
-    _socketService.sendMessage(
-      senderId: _currentUser!.id.toString(),
-      senderEmail: _currentUser!.email,
-      receiverEmail: widget.userEmail,
-      plainMessageText: plainMessageText,
-      tempId: tempId,
-      burnoutDateTime: burnTime?.toUtc(),
-      scheduleDateTime: scheduleTime?.toUtc(),
-    );
+    // Create the payload map
+    final messagePayload = {
+      'senderId': _currentUser!.id.toString(),
+      'senderEmail': _currentUser!.email,
+      'receiverEmail': widget.userEmail,
+      'messageText': plainMessageText,
+      'tempId': tempId,
+      if (burnTime != null)
+        'burnoutDateTime': burnTime.toUtc().toIso8601String(),
+      if (scheduleTime != null)
+        'scheduleDateTime': scheduleTime.toUtc().toIso8601String(),
+    };
+
+    // Use the generic emit method
+    _socketService.emit('sendMessage', messagePayload);
   }
 
   String _formatTime(String? timeString) {

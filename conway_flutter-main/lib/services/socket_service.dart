@@ -12,6 +12,7 @@ class SocketService {
   // --- End Singleton Setup ---
 
   IO.Socket? _socket;
+  // Streams for Direct Messages
   final StreamController<Map<String, dynamic>> _messageController =
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<String> _messageExpiredController =
@@ -19,11 +20,31 @@ class SocketService {
   final StreamController<Map<String, dynamic>> _messageSentController =
       StreamController<Map<String, dynamic>>.broadcast();
 
+  // Streams for Group Messages (NEW)
+  final StreamController<Map<String, dynamic>> _groupMessageController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _groupMessageSentController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
+  // NEW Stream for Group Message Expiry
+  final StreamController<Map<String, dynamic>> _groupMessageExpiredController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
   Stream<Map<String, dynamic>> get onMessageReceived =>
       _messageController.stream;
   Stream<String> get onMessageExpired => _messageExpiredController.stream;
   Stream<Map<String, dynamic>> get onMessageSent =>
       _messageSentController.stream;
+
+  // Public Streams for Group Messages (NEW)
+  Stream<Map<String, dynamic>> get onGroupMessageReceived =>
+      _groupMessageController.stream;
+  Stream<Map<String, dynamic>> get onGroupMessageSent =>
+      _groupMessageSentController.stream;
+
+  // NEW Public Stream for Group Message Expiry
+  Stream<Map<String, dynamic>> get onGroupMessageExpired =>
+      _groupMessageExpiredController.stream;
 
   String? _userId;
   bool get isConnected => _socket?.connected ?? false;
@@ -100,6 +121,10 @@ class SocketService {
     _socket!.off('messageSent');
     _socket!.off('messageExpired');
     _socket!.off('messageSentConfirmation');
+    // Add new group listeners
+    _socket!.off('receiveGroupMessage');
+    _socket!.off('groupMessageSent');
+    _socket!.off('groupMessageExpired');
 
     _socket!.onConnect((_) {
       print('[SocketService ON connect] Socket connected! ID: ${_socket?.id}');
@@ -138,6 +163,22 @@ class SocketService {
       }
     });
 
+    // --- NEW Group Message Listener ---
+    _socket!.on('receiveGroupMessage', (data) {
+      print('[SocketService ON receiveGroupMessage] Raw Data Received: $data');
+      if (data is Map<String, dynamic>) {
+        print(
+          '[SocketService ON receiveGroupMessage] Pushing data to group stream controller...',
+        );
+        _groupMessageController.add(data);
+      } else {
+        print(
+          '[SocketService ON receiveGroupMessage] Received invalid group message format',
+        );
+      }
+    });
+    // --- End NEW Group Message Listener ---
+
     _socket!.on('messageError', (data) {
       print('[SocketService ON messageError] Error from server: $data');
     });
@@ -158,6 +199,45 @@ class SocketService {
       }
     });
 
+    // --- NEW Group Message Sent Confirmation Listener ---
+    _socket!.on('groupMessageSent', (data) {
+      print(
+        '[SocketService ON groupMessageSent Confirmation] Raw Data Received: $data',
+      );
+      if (data is Map<String, dynamic>) {
+        print(
+          '[SocketService ON groupMessageSent Confirmation] Pushing data to group sent stream controller...',
+        );
+        _groupMessageSentController.add(data);
+      } else {
+        print(
+          '[SocketService ON groupMessageSent Confirmation] Received invalid group confirmation format',
+        );
+      }
+    });
+    // --- End NEW Group Message Sent Confirmation Listener ---
+
+    // --- NEW Group Message Expired Listener ---
+    _socket!.on('groupMessageExpired', (data) {
+      print('[SocketService ON groupMessageExpired] Raw Data Received: $data');
+      if (data is Map<String, dynamic> &&
+          data['messageId'] is String &&
+          data['groupId'] is String) {
+        print(
+          '[SocketService ON groupMessageExpired] Pushing data to group expiry stream controller...',
+        );
+        _groupMessageExpiredController.add(
+          data,
+        ); // Pass the whole map (messageId, groupId)
+      } else {
+        print(
+          '[SocketService ON groupMessageExpired] Received invalid group expiry format',
+        );
+      }
+    });
+    // --- End NEW Group Message Expired Listener ---
+
+    // This handles direct message expiry
     _socket!.on('messageExpired', (data) {
       print('[SocketService ON messageExpired] Raw Data Received: $data');
       if (data is Map<String, dynamic> && data['messageId'] is String) {
@@ -174,6 +254,22 @@ class SocketService {
     });
   }
 
+  // --- Modified emit for General Purpose ---
+  // Use this instead of specific sendMessage/sendGroupMessage methods
+  void emit(String event, Map<String, dynamic> data) {
+    if (isConnected) {
+      print('[SocketService] Emitting event \'$event\' with data: $data');
+      _socket!.emit(event, data);
+    } else {
+      print(
+        '[SocketService] Cannot emit event \'$event\': Socket not connected.',
+      );
+      // Optionally queue the event or show an error
+    }
+  }
+
+  // DEPRECATE specific sendMessage method in favor of generic emit
+  /*
   void sendMessage({
     required String senderId,
     required String senderEmail,
@@ -197,11 +293,14 @@ class SocketService {
           'scheduleDateTime': scheduleDateTime.toIso8601String(),
       };
       print('[SocketService] Payload: $messagePayload');
-      _socket!.emit('sendMessage', messagePayload);
+      // Use the generic emit now
+      emit('sendMessage', messagePayload);
+      // _socket!.emit('sendMessage', messagePayload);
     } else {
       print('[SocketService] Cannot send message: Socket not connected.');
     }
   }
+  */
 
   void disconnect() {
     print(

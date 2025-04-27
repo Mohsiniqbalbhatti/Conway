@@ -27,7 +27,6 @@ class HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   int _currentIndex = 0;
-  final PageController _pageController = PageController();
 
   // Color scheme
   final Color _primaryColor = const Color(0xFF19BFB7);
@@ -48,6 +47,19 @@ class HomeScreenState extends State<HomeScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() {
+      if (_tabController.indexIsChanging) {
+        // Optional: Fetch data only when tab actually changes if needed
+        // print("Tab changed to: ${_tabController.index}");
+      } else {
+        // Update _currentIndex when animation finishes
+        if (mounted && _currentIndex != _tabController.index) {
+          setState(() {
+            _currentIndex = _tabController.index;
+          });
+        }
+      }
+    });
     _loadUserData().then((_) {
       if (mounted && _currentUser != null) {
         debugPrint(
@@ -67,7 +79,6 @@ class HomeScreenState extends State<HomeScreen>
   @override
   void dispose() {
     _tabController.dispose();
-    _pageController.dispose();
     _messageSubscription?.cancel();
     super.dispose();
   }
@@ -283,9 +294,9 @@ class HomeScreenState extends State<HomeScreen>
         int hour = localTime.hour;
         final String minute = localTime.minute.toString().padLeft(2, '0');
         final String period = hour < 12 ? 'AM' : 'PM';
-        if (hour == 0)
+        if (hour == 0) {
           hour = 12;
-        else if (hour > 12)
+        } else if (hour > 12)
           hour -= 12;
         return '$hour:$minute $period';
       } else if (difference.inDays == 1 ||
@@ -362,12 +373,8 @@ class HomeScreenState extends State<HomeScreen>
                     ? Center(
                       child: CircularProgressIndicator(color: _primaryColor),
                     )
-                    : PageView(
-                      controller: _pageController,
-                      onPageChanged: (index) {
-                        setState(() => _currentIndex = index);
-                        _tabController.animateTo(index);
-                      },
+                    : IndexedStack(
+                      index: _currentIndex,
                       children: [_buildChatList(), _buildGroupList()],
                     ),
           ),
@@ -441,6 +448,7 @@ class HomeScreenState extends State<HomeScreen>
             }).toList();
 
     return Stack(
+      key: const ValueKey('chat_list_stack'),
       children: [
         filteredChats.isEmpty
             ? Center(
@@ -557,7 +565,20 @@ class HomeScreenState extends State<HomeScreen>
               return name.contains(_searchQuery);
             }).toList();
 
+    // ---- DEBUG PRINT ----
+    debugPrint("[HomeScreen BUILD GroupList] _groups count: ${_groups.length}");
+    debugPrint(
+      "[HomeScreen BUILD GroupList] filteredGroups count: ${filteredGroups.length}",
+    );
+    if (filteredGroups.isNotEmpty) {
+      debugPrint(
+        "[HomeScreen BUILD GroupList] First filtered group: ${filteredGroups.first}",
+      );
+    }
+    // ---- END DEBUG ----
+
     return Stack(
+      key: const ValueKey('group_list_stack'),
       children: [
         filteredGroups.isEmpty
             ? Center(
@@ -674,11 +695,7 @@ class HomeScreenState extends State<HomeScreen>
           currentIndex: _currentIndex,
           onTap: (index) {
             setState(() => _currentIndex = index);
-            _pageController.animateToPage(
-              index,
-              duration: const Duration(milliseconds: 500),
-              curve: Curves.easeInOut,
-            );
+            _tabController.animateTo(index);
           },
           backgroundColor: Colors.white,
           selectedItemColor: _primaryColor,

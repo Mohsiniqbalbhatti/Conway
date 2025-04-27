@@ -14,6 +14,7 @@ const searchRoutes = require("./routes/search");
 const userRoutes = require("./routes/user"); // Import new user routes
 const User = require("./models/User");
 const Message = require("./models/Message");
+const Group = require("./models/Group"); // Import Group model
 
 const app = express();
 const server = http.createServer(app);
@@ -57,134 +58,235 @@ io.on("connection", (socket) => {
     const {
       senderId,
       receiverEmail,
+      groupId,
       messageText,
-      burnoutDateTime,
-      scheduleDateTime,
+      burnoutDateTime, // Now used for both direct and group
+      scheduleDateTime, // Now used for both direct and group
       senderEmail,
+      tempId,
     } = data;
 
-    if (!senderId || !receiverEmail || !messageText || !senderEmail) {
+    // --- Basic Validation ---
+    if (!senderId || !messageText || !(receiverEmail || groupId)) {
       console.error(
-        "[Socket SEND] Invalid sendMessage data (missing sender/receiver/text/senderEmail):",
+        "[Socket SEND] Invalid message data (missing senderId, messageText, or receiverEmail/groupId):",
         data
       );
       socket.emit("messageError", { message: "Invalid message data" });
       return;
     }
+    // If it's a direct message, senderEmail is also needed for the receive payload
+    if (receiverEmail && !senderEmail) {
+      console.error(
+        "[Socket SEND] Invalid direct message data (missing senderEmail):",
+        data
+      );
+      socket.emit("messageError", {
+        message: "Sender email required for direct message",
+      });
+      return;
+    }
 
     try {
-      const sender = await User.findById(senderId);
+      // --- Get Sender ---
+      const sender = await User.findById(senderId).select("fullname email _id");
       if (!sender) {
         console.error(`[Socket SEND] Sender not found for ID: ${senderId}`);
         socket.emit("messageError", { message: "Sender not found" });
         return;
       }
       const senderName = sender.fullname;
-
-      const receiver = await User.findOne({ email: receiverEmail });
-      if (!receiver) {
-        console.error(
-          `[Socket SEND] Receiver not found for email: ${receiverEmail}`
-        );
-        socket.emit("messageError", { message: "Receiver not found" });
-        return;
-      }
-      const receiverId = receiver._id.toString();
-      console.log(
-        `[Socket SEND] Found receiver: ${receiver.fullname} (ID: ${receiverId})`
-      );
+      console.log(`[Socket SEND] Sender found: ${senderName} (${senderId})`);
 
       const plainMessageText = messageText;
       const now = new Date();
+      let newMessageData = {
+        sender: senderId,
+        message: plainMessageText,
+        time: now,
+        // Add burnout/schedule fields - default to false/null
+        isScheduled: false,
+        scheduledAt: null,
+        isBurnout: false,
+        expireAt: null,
+        sent: false, // Always false initially
+      };
 
-      const isScheduled = !!scheduleDateTime;
-      const isBurnout = !!burnoutDateTime;
-      let scheduleTime = isScheduled ? new Date(scheduleDateTime) : null;
-      let expireTime = isBurnout ? new Date(burnoutDateTime) : null;
+      // Common logic for validating/processing dates
+      const isScheduledInput = !!scheduleDateTime;
+      const isBurnoutInput = !!burnoutDateTime;
+      let scheduleTime = isScheduledInput ? new Date(scheduleDateTime) : null;
+      let expireTime = isBurnoutInput ? new Date(burnoutDateTime) : null;
 
       // Validate times are in the future if provided
       if (scheduleTime && scheduleTime <= now) {
         console.warn(
           `[Socket SEND] Schedule time ${scheduleTime.toISOString()} is in the past. Sending now.`
         );
-        scheduleTime = null; // Treat as immediate send
+        scheduleTime = null;
       }
       if (expireTime && expireTime <= now) {
         console.warn(
           `[Socket SEND] Burnout time ${expireTime.toISOString()} is in the past. Ignoring burnout.`
         );
-        expireTime = null; // Ignore burnout
+        expireTime = null;
       }
 
-      const messageData = {
-        sender: senderId,
-        receiver: receiver._id,
-        message: plainMessageText,
-        time: now, // Record when the request was received
-        isScheduled: !!scheduleTime,
-        scheduledAt: scheduleTime,
-        isBurnout: !!expireTime,
-        expireAt: expireTime,
-        sent: false, // Mark as not sent initially
-      };
+      // Apply validated schedule/burnout times to message data
+      newMessageData.isScheduled = !!scheduleTime;
+      newMessageData.scheduledAt = scheduleTime;
+      newMessageData.isBurnout = !!expireTime;
+      newMessageData.expireAt = expireTime;
 
-      const newMessage = new Message(messageData);
-      await newMessage.save();
-      console.log(
-        `[Socket SEND] Message saved to DB (ID: ${
-          newMessage._id
-        }, Scheduled: ${!!scheduleTime}, Burnout: ${!!expireTime})`
-      );
+      // --- Handle Group Message ---
+      if (groupId) {
+        newMessageData.group = groupId;
+        newMessageData.receiver = null;
 
-      // If it's NOT scheduled, send immediately
-      if (!scheduleTime) {
-        const recipientSocketId = userSockets.get(receiverId);
-        const messageToSend = {
-          id: newMessage._id,
-          senderId: senderId,
-          senderEmail: senderEmail,
-          senderName: senderName,
-          receiverEmail: receiverEmail,
-          text: plainMessageText,
-          time: newMessage.time.toISOString(), // Time it was saved/sent
-          isBurnout: newMessage.isBurnout,
-          expireAt: newMessage.expireAt?.toISOString(), // Send expiry time if set
-        };
+        console.log(
+          `[Socket SEND] Processing group message for group: ${groupId}`
+        );
+        const group = await Group.findById(groupId).select("users");
+        if (!group) {
+          console.error(`[Socket SEND] Group not found for ID: ${groupId}`);
+          socket.emit("messageError", { message: "Group not found" });
+          return;
+        }
 
-        if (recipientSocketId) {
-          console.log(
-            `[Socket SEND] Recipient ${receiverEmail} ONLINE. Emitting receiveMessage to socket ${recipientSocketId}.`
-          );
-          io.to(recipientSocketId).emit("receiveMessage", messageToSend);
-          newMessage.sent = true;
-          await newMessage.save(); // Update sent status
-          console.log(
-            `[Socket SEND] Message ${newMessage._id} marked as sent.`
-          );
+        // Save message to DB
+        const newMessage = new Message(newMessageData);
+        await newMessage.save();
+        console.log(
+          `[Socket SEND] Group message saved (ID: ${newMessage._id}, Scheduled: ${newMessage.isScheduled}, Burnout: ${newMessage.isBurnout})`
+        );
+
+        // Emit to online group members if NOT scheduled
+        if (!newMessage.isScheduled) {
+          const messageToSend = {
+            id: newMessage._id.toString(),
+            groupId: groupId,
+            senderId: senderId,
+            senderName: senderName,
+            text: plainMessageText,
+            time: newMessage.time.toISOString(),
+            // Include burnout/schedule info for clients
+            isBurnout: newMessage.isBurnout,
+            expireAt: newMessage.expireAt?.toISOString(),
+            isScheduled: newMessage.isScheduled, // Although false here, include for consistency?
+            scheduledAt: newMessage.scheduledAt?.toISOString(),
+          };
+
+          group.users.forEach((userId) => {
+            const memberIdStr = userId.toString();
+            if (memberIdStr !== senderId) {
+              const memberSocketId = userSockets.get(memberIdStr);
+              if (memberSocketId) {
+                console.log(
+                  `[Socket SEND] Emitting receiveGroupMessage to member ${memberIdStr} (Socket: ${memberSocketId})`
+                );
+                io.to(memberSocketId).emit(
+                  "receiveGroupMessage",
+                  messageToSend
+                );
+              }
+            }
+          });
         } else {
           console.log(
-            `[Socket SEND] Recipient ${receiverEmail} (ID: ${receiverId}) OFFLINE. Message ${newMessage._id} saved but not sent immediately.`
+            `[Socket SEND] Group message ${newMessage._id} is SCHEDULED. Not sending now.`
           );
-          // Message remains sent: false, will be picked up by /get-messages or /getupdate later?
-          // Maybe /getupdate should check for sent: false messages too?
-          // For now, rely on /get-messages
         }
-      } else {
-        console.log(
-          `[Socket SEND] Message ${
-            newMessage._id
-          } is SCHEDULED for ${scheduleTime.toISOString()}. Not sending now.`
-        );
-        // Acknowledge schedule? Optional.
-        // socket.emit('messageScheduled', { dbId: newMessage._id, scheduledAt: scheduleTime });
-      }
 
-      // Confirm original message processing to sender
-      socket.emit("messageSent", {
-        tempId: data.tempId,
-        dbId: newMessage._id,
-        time: newMessage.time,
-      });
+        // Confirm processing back to sender
+        socket.emit("groupMessageSent", {
+          tempId: tempId,
+          dbId: newMessage._id.toString(),
+          time: newMessage.time.toISOString(),
+          groupId: groupId,
+          // Include schedule/burnout info in confirmation
+          isScheduled: newMessage.isScheduled,
+          scheduledAt: newMessage.scheduledAt?.toISOString(),
+          isBurnout: newMessage.isBurnout,
+          expireAt: newMessage.expireAt?.toISOString(),
+        });
+      }
+      // --- Handle Direct Message ---
+      else if (receiverEmail) {
+        console.log(
+          `[Socket SEND] Processing direct message for receiver: ${receiverEmail}`
+        );
+        const receiver = await User.findOne({ email: receiverEmail });
+        if (!receiver) {
+          console.error(
+            `[Socket SEND] Receiver not found for email: ${receiverEmail}`
+          );
+          socket.emit("messageError", { message: "Receiver not found" });
+          return;
+        }
+        const receiverId = receiver._id.toString();
+        console.log(
+          `[Socket SEND] Found receiver: ${receiver.fullname} (ID: ${receiverId})`
+        );
+
+        newMessageData.receiver = receiver._id;
+        newMessageData.group = null;
+        // Burnout/schedule already added above
+
+        // Save message to DB
+        const newMessage = new Message(newMessageData);
+        await newMessage.save();
+        console.log(
+          `[Socket SEND] Direct message saved (ID: ${newMessage._id}, Scheduled: ${newMessage.isScheduled}, Burnout: ${newMessage.isBurnout})`
+        );
+
+        // Send immediately if NOT scheduled
+        if (!newMessage.isScheduled) {
+          const recipientSocketId = userSockets.get(receiverId);
+          const messageToSend = {
+            id: newMessage._id.toString(),
+            senderId: senderId,
+            senderEmail: sender.email,
+            senderName: senderName,
+            receiverEmail: receiverEmail,
+            text: plainMessageText,
+            time: newMessage.time.toISOString(),
+            isBurnout: newMessage.isBurnout,
+            expireAt: newMessage.expireAt?.toISOString(),
+            isScheduled: newMessage.isScheduled, // Although false here
+            scheduledAt: newMessage.scheduledAt?.toISOString(),
+          };
+
+          if (recipientSocketId) {
+            console.log(
+              `[Socket SEND] Recipient ${receiverEmail} ONLINE. Emitting receiveMessage to socket ${recipientSocketId}.`
+            );
+            io.to(recipientSocketId).emit("receiveMessage", messageToSend);
+            newMessage.sent = true;
+            await newMessage.save();
+          } else {
+            console.log(
+              `[Socket SEND] Recipient ${receiverEmail} (ID: ${receiverId}) OFFLINE. Message ${newMessage._id} saved.`
+            );
+            // Message remains sent: false
+          }
+        } else {
+          console.log(
+            `[Socket SEND] Direct message ${newMessage._id} is SCHEDULED.`
+          );
+        }
+
+        // Confirm processing back to sender
+        socket.emit("messageSent", {
+          tempId: tempId,
+          dbId: newMessage._id.toString(),
+          time: newMessage.time.toISOString(),
+          // Include schedule/burnout info in confirmation
+          isScheduled: newMessage.isScheduled,
+          scheduledAt: newMessage.scheduledAt?.toISOString(),
+          isBurnout: newMessage.isBurnout,
+          expireAt: newMessage.expireAt?.toISOString(),
+        });
+      }
     } catch (error) {
       console.error("[Socket SEND] Error handling sendMessage:", error);
       socket.emit("messageError", { message: "Server error sending message" });
@@ -220,110 +322,211 @@ io.on("connection", (socket) => {
 // --- Scheduler Service ---
 async function checkScheduledAndExpiredMessages() {
   const now = new Date();
-  console.log(`[Scheduler] Checking for jobs before ${now.toISOString()}...`);
+  console.log(`[Scheduler] Checking jobs @ ${now.toISOString()}...`);
   try {
-    // --- Handle Scheduled Messages ---
+    // --- Handle Scheduled Messages (Direct & Group) ---
     const scheduledMessagesToSend = await Message.find({
       isScheduled: true,
       scheduledAt: { $lte: now },
-    }).populate("sender receiver", "fullname email _id");
+      deleted_at: null, // Ensure not deleted
+    }).populate("sender receiver group", "fullname email _id users"); // Populate group for group msgs
+
+    console.log(
+      `[Scheduler] Found ${scheduledMessagesToSend.length} potential scheduled messages to send.`
+    );
 
     if (scheduledMessagesToSend.length > 0) {
-      console.log(
-        `[Scheduler] Found ${scheduledMessagesToSend.length} scheduled messages to send.`
-      );
       for (const msg of scheduledMessagesToSend) {
-        const receiverId = msg.receiver?._id.toString();
-        const senderId = msg.sender?._id.toString();
-        const senderName = msg.sender?.fullname || "Unknown Sender";
-        const senderEmail = msg.sender?.email;
-        const receiverEmail = msg.receiver?.email;
-
-        if (!receiverId || !senderId || !senderEmail || !receiverEmail) {
-          console.error(
-            `[Scheduler] Skipping scheduled message ${msg._id} due to missing sender/receiver info.`
-          );
-          msg.isScheduled = false; // Still mark as processed
-          await msg.save();
-          continue;
-        }
-
-        const recipientSocketId = userSockets.get(receiverId);
-        const messagePayload = {
-          id: msg._id.toString(), // Ensure ID is string
-          senderId: senderId,
-          senderEmail: senderEmail,
-          senderName: senderName,
-          receiverEmail: receiverEmail,
-          text: msg.message,
-          time: msg.scheduledAt.toISOString(), // Time it was intended to be sent
-          isBurnout: msg.isBurnout,
-          expireAt: msg.expireAt?.toISOString(),
-        };
-
-        if (recipientSocketId) {
-          console.log(
-            `[Scheduler] Sending scheduled message ${msg._id} to online user ${receiverEmail} (Socket: ${recipientSocketId})`
-          );
-          io.to(recipientSocketId).emit("receiveMessage", messagePayload);
-          msg.sent = true;
-        } else {
-          console.log(
-            `[Scheduler] Scheduled message ${msg._id} for offline user ${receiverEmail}. Marked for later fetch.`
-          );
-          msg.sent = false;
-        }
-        msg.isScheduled = false;
-        msg.time = new Date(); // Update time to when it was actually processed
-        await msg.save();
         console.log(
-          `[Scheduler] Scheduled message ${msg._id} processed. Sent: ${msg.sent}`
+          `[Scheduler] Processing msg ${
+            msg._id
+          }. Scheduled at: ${msg.scheduledAt?.toISOString()}, Current time: ${now.toISOString()}`
         );
+        // --- Scheduled Group Message ---
+        if (msg.group) {
+          const groupId = msg.group._id.toString();
+          const senderId = msg.sender?._id.toString();
+          const senderName = msg.sender?.fullname || "Unknown";
+
+          if (!senderId || !msg.group.users) {
+            console.error(
+              `[Scheduler] Skipping scheduled group msg ${msg._id} (missing sender/group users).`
+            );
+            msg.isScheduled = false;
+            await msg.save(); // Mark as processed even if skipped
+            continue;
+          }
+
+          console.log(
+            `[Scheduler] Processing scheduled GROUP message ${msg._id} for group ${groupId}`
+          );
+          const messagePayload = {
+            id: msg._id.toString(),
+            groupId: groupId,
+            senderId: senderId,
+            senderName: senderName,
+            text: msg.message,
+            time: msg.scheduledAt.toISOString(), // Use scheduled time
+            isBurnout: msg.isBurnout,
+            expireAt: msg.expireAt?.toISOString(),
+            isScheduled: false, // It's being sent now
+            scheduledAt: msg.scheduledAt?.toISOString(), // Keep original schedule time
+          };
+
+          msg.group.users.forEach((userId) => {
+            const memberIdStr = userId.toString();
+            if (memberIdStr !== senderId) {
+              // Don't send to sender
+              const memberSocketId = userSockets.get(memberIdStr);
+              if (memberSocketId) {
+                console.log(
+                  `[Scheduler] Emitting receiveGroupMessage to member ${memberIdStr} (Socket: ${memberSocketId}) for msg ${msg._id}`
+                );
+                io.to(memberSocketId).emit(
+                  "receiveGroupMessage",
+                  messagePayload
+                );
+              } else {
+                console.log(
+                  `[Scheduler] Member ${memberIdStr} for group msg ${msg._id} is OFFLINE.`
+                );
+              }
+            }
+          });
+        }
+        // --- Scheduled Direct Message ---
+        else if (msg.receiver) {
+          const receiverId = msg.receiver._id.toString();
+          const senderId = msg.sender._id.toString();
+          const senderName = msg.sender.fullname;
+          const senderEmail = msg.sender.email;
+          const receiverEmail = msg.receiver.email;
+
+          if (!receiverId || !senderId || !senderEmail || !receiverEmail) {
+            console.error(
+              `[Scheduler] Skipping scheduled direct msg ${msg._id} (missing info).`
+            );
+            msg.isScheduled = false;
+            await msg.save(); // Mark as processed even if skipped
+            continue;
+          }
+
+          console.log(
+            `[Scheduler] Processing scheduled DIRECT message ${msg._id} to ${receiverEmail}`
+          );
+          const recipientSocketId = userSockets.get(receiverId);
+          const messagePayload = {
+            id: msg._id.toString(),
+            senderId: senderId,
+            senderEmail: senderEmail,
+            senderName: senderName,
+            receiverEmail: receiverEmail,
+            text: msg.message,
+            time: msg.scheduledAt.toISOString(),
+            isBurnout: msg.isBurnout,
+            expireAt: msg.expireAt?.toISOString(),
+            isScheduled: false,
+            scheduledAt: msg.scheduledAt?.toISOString(),
+          };
+
+          if (recipientSocketId) {
+            console.log(
+              `[Scheduler] Sending scheduled msg ${msg._id} to online user ${receiverEmail} (Socket: ${recipientSocketId})`
+            );
+            io.to(recipientSocketId).emit("receiveMessage", messagePayload);
+            msg.sent = true;
+          } else {
+            console.log(
+              `[Scheduler] Scheduled msg ${msg._id} for offline user ${receiverEmail}. Marked for later fetch.`
+            );
+            msg.sent = false;
+          }
+        }
+
+        // Mark as processed regardless of type
+        msg.isScheduled = false;
+        msg.time = new Date(); // Update time to when it was actually processed/sent
+        console.log(
+          `[Scheduler] Attempting to mark msg ${msg._id} as processed (isScheduled: false).`
+        );
+        await msg.save();
+        console.log(`[Scheduler] Scheduled message ${msg._id} processed.`);
       }
     }
 
-    // --- Handle Expired Burnout Messages ---
+    // --- Handle Expired Burnout Messages (Direct & Group) ---
     const expiredMessages = await Message.find({
       isBurnout: true,
       expireAt: { $lte: now },
-      deleted_at: null, // Add a flag/field to ensure we only process once?
-      // For now, we rely on the client ignoring subsequent expiry events.
-      // A `burnoutProcessedAt` field could be added to the model.
-    }).populate("receiver", "_id"); // Only need receiver ID
+      deleted_at: null, // Process only once (or use a dedicated flag)
+    }).populate("receiver group", "_id users"); // Populate receiver OR group
+
+    console.log(
+      `[Scheduler] Found ${expiredMessages.length} potential expired burnout messages.`
+    );
 
     if (expiredMessages.length > 0) {
-      console.log(
-        `[Scheduler] Found ${expiredMessages.length} expired burnout messages.`
-      );
       for (const msg of expiredMessages) {
-        const receiverId = msg.receiver?._id.toString();
-        if (!receiverId) {
-          console.warn(
-            `[Scheduler] Expired message ${msg._id} has no receiver ID.`
-          );
-          // Optionally mark as processed here?
-          // msg.deleted_at = now; // Or use a dedicated flag
-          // await msg.save();
-          continue;
-        }
-
-        const recipientSocketId = userSockets.get(receiverId);
-        if (recipientSocketId) {
+        console.log(
+          `[Scheduler] Processing expired msg ${
+            msg._id
+          }. Expire at: ${msg.expireAt?.toISOString()}, Current time: ${now.toISOString()}`
+        );
+        // --- Expired Group Message ---
+        if (msg.group && msg.group.users) {
+          const groupId = msg.group._id.toString();
           console.log(
-            `[Scheduler] Emitting messageExpired for ${msg._id} to receiver ${receiverId} (Socket: ${recipientSocketId})`
+            `[Scheduler] Processing expired GROUP message ${msg._id} for group ${groupId}`
           );
-          // Emit only the ID, client will handle removal
-          io.to(recipientSocketId).emit("messageExpired", {
+          const expiryPayload = {
             messageId: msg._id.toString(),
+            groupId: groupId,
+          };
+
+          msg.group.users.forEach((userId) => {
+            const memberIdStr = userId.toString();
+            const memberSocketId = userSockets.get(memberIdStr);
+            if (memberSocketId) {
+              console.log(
+                `[Scheduler] Emitting groupMessageExpired to member ${memberIdStr} (Socket: ${memberSocketId})`
+              );
+              // Use a NEW event for group expiry
+              io.to(memberSocketId).emit("groupMessageExpired", expiryPayload);
+            }
           });
-        } else {
+          // Mark as processed (e.g., set deleted_at)
+          msg.deleted_at = now; // Or use a dedicated flag like burnoutProcessedAt
+          await msg.save();
           console.log(
-            `[Scheduler] Receiver ${receiverId} for expired message ${msg._id} is offline. Expiry will be handled on next fetch.`
+            `[Scheduler] Marked expired group message ${msg._id} as processed.`
           );
         }
-        // Mark as processed? If we add a flag like deleted_at or burnoutProcessedAt
-        // msg.deleted_at = now; // Example
-        // await msg.save();
+        // --- Expired Direct Message ---
+        else if (msg.receiver) {
+          const receiverId = msg.receiver._id.toString();
+          console.log(
+            `[Scheduler] Processing expired DIRECT message ${msg._id} for receiver ${receiverId}`
+          );
+          const recipientSocketId = userSockets.get(receiverId);
+          if (recipientSocketId) {
+            console.log(
+              `[Scheduler] Emitting messageExpired for ${msg._id} to receiver ${receiverId}`
+            );
+            io.to(recipientSocketId).emit("messageExpired", {
+              messageId: msg._id.toString(),
+            });
+          } else {
+            console.log(
+              `[Scheduler] Receiver ${receiverId} for expired message ${msg._id} is offline.`
+            );
+          }
+          // Mark as processed
+          msg.deleted_at = now;
+          await msg.save();
+          console.log(
+            `[Scheduler] Marked expired direct message ${msg._id} as processed.`
+          );
+        }
       }
     }
   } catch (error) {

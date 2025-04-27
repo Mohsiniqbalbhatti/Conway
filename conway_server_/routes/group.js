@@ -1,34 +1,67 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const Group = require('../models/Group');
-const User = require('../models/User');
-const Message = require('../models/Message');
+const multer = require("multer");
+const cloudinary = require("cloudinary").v2;
+const Group = require("../models/Group");
+const User = require("../models/User");
+const Message = require("../models/Message");
+
+// --- Multer Setup for Memory Storage (Copied from user.js) ---
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // Limit file size (e.g., 5MB)
+  fileFilter: (req, file, cb) => {
+    // Accept common image types
+    if (
+      file.mimetype === "image/jpeg" ||
+      file.mimetype === "image/png" ||
+      file.mimetype === "image/gif" ||
+      file.mimetype === "image/jpg"
+    ) {
+      cb(null, true); // Accept the file
+    } else {
+      cb(
+        new Error("Invalid file type. Only JPEG, PNG, or GIF images allowed."),
+        false
+      );
+    }
+  },
+});
+// --- End Multer Setup ---
 
 // Create Group
-router.post('/groups', async (req, res) => {
+router.post("/groups", async (req, res) => {
   try {
     const { groupName, creator, deleted_at } = req.body;
-    const group = new Group({ groupName, creator, deleted_at, users: [creator] });
+    const group = new Group({
+      groupName,
+      creator,
+      deleted_at,
+      users: [creator],
+    });
     await group.save();
-    res.send({ message: 'Group created', group });
+    res.send({ message: "Group created", group });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to create group', details: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to create group", details: err.message });
   }
 });
 
 // Add User to Group
-router.post('/addInGroup', async (req, res) => {
+router.post("/addInGroup", async (req, res) => {
   try {
     const { userEmail, groupId } = req.body;
     const user = await User.findOne({ email: userEmail });
 
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ error: "User not found" });
     }
 
     const group = await Group.findById(groupId);
     if (!group) {
-      return res.status(404).json({ error: 'Group not found' });
+      return res.status(404).json({ error: "Group not found" });
     }
 
     const userId = user._id;
@@ -37,100 +70,146 @@ router.post('/addInGroup', async (req, res) => {
       await group.save();
     }
 
-    res.send({ message: 'User added to group' });
+    res.send({ message: "User added to group" });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to add user to group', details: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to add user to group", details: err.message });
   }
 });
 
 // Get group members
-router.get('/group-members/:groupId', async (req, res) => {
+router.get("/group-members/:groupId", async (req, res) => {
   try {
     const { groupId } = req.params;
-    
+
     const group = await Group.findById(groupId);
     if (!group) {
-      return res.status(404).json({ error: 'Group not found' });
+      return res.status(404).json({ error: "Group not found" });
     }
-    
+
     // Get user details for all group members
     const members = await User.find(
       { _id: { $in: group.users } },
-      'fullname email profileUrl'
+      "fullname email profileUrl"
     );
-    
+
     res.json({
-      members: members.map(member => ({
+      members: members.map((member) => ({
         id: member._id,
         name: member.fullname,
         email: member.email,
         profileUrl: member.profileUrl,
-      }))
+      })),
     });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to get group members', details: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to get group members", details: err.message });
   }
 });
 
 // Get group messages
-router.get('/group-messages/:groupId', async (req, res) => {
+router.get("/group-messages/:groupId", async (req, res) => {
   try {
     const { groupId } = req.params;
-    
+    const { userId: requestingUserId } = req.query; // Get requesting user ID from query
+    const now = new Date();
+
     const group = await Group.findById(groupId);
     if (!group) {
-      return res.status(404).json({ error: 'Group not found' });
+      return res.status(404).json({ error: "Group not found" });
     }
-    
-    // Get all messages for this group that aren't deleted
-    const messages = await Message.find({
-      group: groupId,
-      deleted_at: null
-    })
-    .sort({ time: 1 })
-    .populate('sender', 'fullname email');
-    
+
+    // Base query: group match, not deleted
+    const query = { group: groupId, deleted_at: null };
+
+    // Add filter to exclude future scheduled messages NOT sent by the requesting user
+    if (requestingUserId) {
+      // If we know the user, only hide others' future scheduled messages
+      query["$nor"] = [
+        {
+          sender: { $ne: requestingUserId }, // Sender is not the requester
+          isScheduled: true, // Message is scheduled
+          scheduledAt: { $gt: now }, // Scheduled time is in the future
+        },
+      ];
+    } else {
+      // If user ID is not provided, hide ALL future scheduled messages
+      query["$nor"] = [{ isScheduled: true, scheduledAt: { $gt: now } }];
+    }
+
+    const messages = await Message.find(query)
+      .sort({ time: 1 })
+      .populate("sender", "fullname email");
+
     // Format messages for the client
-    const formattedMessages = messages.map(msg => ({
-      id: msg._id,
-      senderId: msg.sender._id,
-      senderName: msg.sender.fullname,
-      senderEmail: msg.sender.email,
-      text: msg.message,
-      time: msg.time,
-    }));
-    
+    const formattedMessages = messages.map((msg) => {
+      // Determine if already expired for the sender
+      const isMe = requestingUserId === msg.sender?._id.toString();
+      const isBurnout = msg.isBurnout ?? false;
+      const expireAt = msg.expireAt ? new Date(msg.expireAt) : null;
+      const actuallyExpiredForSender =
+        isMe && isBurnout && expireAt && expireAt <= now;
+
+      // Determine if pending schedule (only relevant if sender is known and is the requester)
+      const isScheduled = msg.isScheduled ?? false;
+      const scheduledAt = msg.scheduledAt ? new Date(msg.scheduledAt) : null;
+      const isPendingSchedule =
+        isMe && isScheduled && scheduledAt && scheduledAt > now;
+
+      return {
+        id: msg._id,
+        senderId: msg.sender._id,
+        senderName: msg.sender.fullname,
+        senderEmail: msg.sender.email,
+        text: msg.message,
+        time: msg.time,
+        isBurnout: isBurnout,
+        expireAt: msg.expireAt?.toISOString(), // Send as ISO string
+        isScheduled: isScheduled,
+        scheduledAt: msg.scheduledAt?.toISOString(), // Send as ISO string
+        // Add flags needed for UI rendering
+        actuallyExpired: actuallyExpiredForSender,
+        // visuallyExpired is determined client-side based on expiry event
+        // isPendingSchedule: isPendingSchedule, // Can derive this client-side too if needed
+      };
+    });
+
     res.json({ messages: formattedMessages });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to get group messages', details: err.message });
+    console.error(
+      `[GET Group Messages Error] Group ID ${req.params.groupId}, User ${requestingUserId}:`,
+      err
+    );
+    res
+      .status(500)
+      .json({ error: "Failed to get group messages", details: err.message });
   }
 });
 
 // Get suggested groups for a user based on their chat contacts
-router.get('/suggested-groups', async (req, res) => {
+router.get("/suggested-groups", async (req, res) => {
   try {
     const { email } = req.query;
     if (!email) {
-      return res.status(400).json({ error: 'Email is required' });
+      return res.status(400).json({ error: "Email is required" });
     }
 
     // Find the user
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ error: "User not found" });
     }
 
     // Find all messages to/from this user to identify their contacts
     const messages = await Message.find({
-      $or: [
-        { 'sender': user._id },
-        { 'receiver': user._id }
-      ]
+      $or: [{ sender: user._id }, { receiver: user._id }],
     });
 
     // Extract unique user IDs the user has chatted with
     const contactIds = new Set();
-    messages.forEach(msg => {
+    messages.forEach((msg) => {
       if (msg.sender.toString() !== user._id.toString()) {
         contactIds.add(msg.sender.toString());
       }
@@ -141,35 +220,272 @@ router.get('/suggested-groups', async (req, res) => {
 
     // Find groups where the user's contacts are members, but the user is not
     const groups = await Group.find({
-      users: { $nin: [user._id] } // User is not in these groups
-    }).populate('users creator', 'fullname email');
+      users: { $nin: [user._id] }, // User is not in these groups
+    }).populate("users creator", "fullname email");
 
     // Filter and sort groups by the number of the user's contacts in each group
-    const suggestedGroups = groups.map(group => {
-      const commonContacts = group.users.filter(groupUser => 
-        contactIds.has(groupUser._id.toString())
-      );
-      
-      return {
-        _id: group._id,
-        groupName: group.groupName,
-        creator: {
-          fullname: group.creator.fullname,
-          email: group.creator.email
-        },
-        memberCount: group.users.length,
-        commonContactsCount: commonContacts.length
-      };
-    })
-    .filter(group => group.commonContactsCount > 0) // Only suggest groups with common contacts
-    .sort((a, b) => b.commonContactsCount - a.commonContactsCount); // Sort by most common contacts first
+    const suggestedGroups = groups
+      .map((group) => {
+        const commonContacts = group.users.filter((groupUser) =>
+          contactIds.has(groupUser._id.toString())
+        );
 
-    res.json({ 
-      groups: suggestedGroups.slice(0, 5) // Limit to top 5 suggestions
+        return {
+          _id: group._id,
+          groupName: group.groupName,
+          creator: {
+            fullname: group.creator.fullname,
+            email: group.creator.email,
+          },
+          memberCount: group.users.length,
+          commonContactsCount: commonContacts.length,
+        };
+      })
+      .filter((group) => group.commonContactsCount > 0) // Only suggest groups with common contacts
+      .sort((a, b) => b.commonContactsCount - a.commonContactsCount); // Sort by most common contacts first
+
+    res.json({
+      groups: suggestedGroups.slice(0, 5), // Limit to top 5 suggestions
     });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to get suggested groups', details: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to get suggested groups", details: err.message });
   }
 });
+
+// --- Routes for Group Settings ---
+
+// GET Group Details (for settings screen)
+router.get("/groups/:groupId/details", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const group = await Group.findById(groupId)
+      .populate("creator", "fullname email _id") // Populate creator info
+      .populate("users", "fullname email profileUrl _id"); // Populate member info
+
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+
+    // Format the response
+    res.json({
+      _id: group._id,
+      groupName: group.groupName,
+      profileUrl: group.profileUrl,
+      creatorId: group.creator._id,
+      creatorName: group.creator.fullname,
+      members: group.users.map((user) => ({
+        _id: user._id,
+        fullname: user.fullname,
+        email: user.email,
+        profileUrl: user.profileUrl,
+      })),
+      createdAt: group.createdAt,
+      updatedAt: group.updatedAt,
+    });
+  } catch (err) {
+    console.error(
+      `[GET Group Details Error] Group ID ${req.params.groupId}:`,
+      err
+    );
+    res
+      .status(500)
+      .json({ error: "Failed to get group details", details: err.message });
+  }
+});
+
+// PUT Update Group Info (Name, Profile Picture) - Admin Only
+router.put("/groups/:groupId", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { groupName, profileUrl, userId } = req.body; // userId is the ID of the user making the request
+
+    if (!userId) {
+      return res
+        .status(400)
+        .json({ error: "User ID is required for authorization" });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+
+    // Authorization: Only the creator can update
+    if (group.creator.toString() !== userId) {
+      return res.status(403).json({
+        error: "Forbidden: Only the group creator can update group info",
+      });
+    }
+
+    // Update fields if provided
+    let updated = false;
+    if (groupName && groupName !== group.groupName) {
+      group.groupName = groupName;
+      updated = true;
+    }
+    if (profileUrl && profileUrl !== group.profileUrl) {
+      group.profileUrl = profileUrl;
+      updated = true;
+    }
+
+    if (updated) {
+      group.updatedAt = Date.now();
+      await group.save();
+      res.json({ message: "Group updated successfully", group }); // Return updated group
+    } else {
+      res.json({ message: "No changes provided", group }); // Return current group if no changes
+    }
+  } catch (err) {
+    console.error(
+      `[PUT Group Update Error] Group ID ${req.params.groupId}:`,
+      err
+    );
+    res
+      .status(500)
+      .json({ error: "Failed to update group", details: err.message });
+  }
+});
+
+// POST Add Members to Group - Admin Only
+router.post("/groups/:groupId/members", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { emailsToAdd, userId } = req.body; // userId of requester, emailsToAdd is an array of emails
+
+    if (!userId) {
+      return res
+        .status(400)
+        .json({ error: "User ID is required for authorization" });
+    }
+    if (
+      !emailsToAdd ||
+      !Array.isArray(emailsToAdd) ||
+      emailsToAdd.length === 0
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Array of emails to add is required" });
+    }
+
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+
+    // Authorization: Only creator can add members
+    if (group.creator.toString() !== userId) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: Only the group creator can add members" });
+    }
+
+    // Find users by email
+    const usersToAdd = await User.find({ email: { $in: emailsToAdd } });
+    const userIdsToAdd = usersToAdd.map((user) => user._id);
+
+    let addedCount = 0;
+    userIdsToAdd.forEach((id) => {
+      if (!group.users.includes(id)) {
+        group.users.push(id);
+        addedCount++;
+      }
+    });
+
+    if (addedCount > 0) {
+      group.updatedAt = Date.now();
+      await group.save();
+      res.json({
+        message: `${addedCount} member(s) added successfully`,
+        addedUserIds: userIdsToAdd,
+      });
+    } else {
+      res.json({
+        message:
+          "No new members added (users might already be in the group or emails not found)",
+      });
+    }
+  } catch (err) {
+    console.error(
+      `[POST Add Group Members Error] Group ID ${req.params.groupId}:`,
+      err
+    );
+    res
+      .status(500)
+      .json({ error: "Failed to add members to group", details: err.message });
+  }
+});
+
+// --- NEW Route to Upload Group Picture ---
+// This route ONLY handles the upload and returns the URL.
+// The actual Group model update happens via PUT /api/groups/:groupId
+router.post(
+  "/group-picture", // Endpoint path within the group router
+  upload.single("groupImage"), // Field name from frontend
+  async (req, res) => {
+    console.log("[POST /groups/group-picture] Request received.");
+
+    if (!req.file) {
+      console.log("[POST /groups/group-picture] No file uploaded.");
+      return res.status(400).json({ message: "No image file uploaded." });
+    }
+
+    const { groupId } = req.body; // Optional: Get groupId from body
+
+    console.log(
+      `[POST /groups/group-picture] Attempting upload for group: ${
+        groupId || "unknown"
+      }`
+    );
+
+    try {
+      // Upload to Cloudinary
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder: "conway_groups", // Folder for group images
+          resource_type: "image",
+        },
+        (error, result) => {
+          if (error) {
+            console.error(
+              "[POST /groups/group-picture] Cloudinary upload error:",
+              error
+            );
+            return res.status(500).json({
+              message: "Failed to upload group image.",
+              details: error.message,
+            });
+          }
+          if (!result || !result.secure_url) {
+            console.error(
+              "[POST /groups/group-picture] Cloudinary result missing secure_url:",
+              result
+            );
+            return res.status(500).json({
+              message: "Image upload failed (invalid Cloudinary response).",
+            });
+          }
+          console.log(
+            `[POST /groups/group-picture] Cloudinary upload successful. URL: ${result.secure_url}`
+          );
+          // Return the URL
+          res.status(200).json({
+            message: "Group image uploaded successfully.",
+            groupProfileUrl: result.secure_url,
+          });
+        }
+      );
+      // Pipe buffer to Cloudinary
+      uploadStream.end(req.file.buffer);
+    } catch (err) {
+      console.error("[POST /groups/group-picture] Server error:", err);
+      res.status(500).json({
+        message: "Server error uploading group image.",
+        details: err.message,
+      });
+    }
+  }
+);
 
 module.exports = router;

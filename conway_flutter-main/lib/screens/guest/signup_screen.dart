@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import '../../constants/colors.dart';
 import '../../constants/api_config.dart';
@@ -13,7 +12,7 @@ import 'otp_verification_screen.dart';
 class SignupScreen extends StatefulWidget {
   final VoidCallback toggleView;
 
-  const SignupScreen({Key? key, required this.toggleView}) : super(key: key);
+  const SignupScreen({super.key, required this.toggleView});
 
   @override
   State<SignupScreen> createState() => _SignupScreenState();
