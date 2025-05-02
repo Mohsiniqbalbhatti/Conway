@@ -181,9 +181,36 @@ class SettingScreenState extends State<SettingScreen> {
 
   Future<void> _logout() async {
     try {
+      // Get the current user
+      final user = await DBHelper().getUser();
+      if (user == null) {
+        throw Exception('No user found to logout');
+      }
+
       // Disconnect Socket FIRST
       print("[SettingScreen] Disconnecting socket before logout.");
       _socketService.disconnect();
+
+      // Send logout request to backend with error handling
+      try {
+        final response = await http.post(
+          Uri.parse(ApiConfig.logout),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'email': user.email, 'userId': user.id}),
+        );
+
+        if (response.statusCode != 200) {
+          print(
+            "Backend logout returned: ${response.statusCode} ${response.body}",
+          );
+          // Continue with logout even if the backend request fails
+        } else {
+          print("Backend logout successful");
+        }
+      } catch (e) {
+        // Just log the error and continue with local logout
+        print("Error calling logout endpoint: $e");
+      }
 
       // Clear user data from the database
       await DBHelper().deleteUser();
@@ -201,6 +228,7 @@ class SettingScreenState extends State<SettingScreen> {
       // Navigate to the auth wrapper which will show login screen
       Navigator.of(context).pushNamedAndRemoveUntil('/auth', (route) => false);
     } catch (e) {
+      print("Logout error: $e");
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Error logging out: ${e.toString()}")),
       );

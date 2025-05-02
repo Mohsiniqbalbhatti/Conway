@@ -3,6 +3,7 @@ const router = express.Router();
 const User = require("../models/User");
 const Group = require("../models/Group");
 const Message = require("../models/Message");
+const Chat = require("../models/Chat");
 // const { encrypt, decrypt } = require('../utils/crypto'); // Import crypto utils
 
 // Get update - Fetches latest message per conversation and groups
@@ -36,64 +37,41 @@ router.post("/getupdate", async (req, res) => {
     }).populate("creator", "fullname email");
     console.log(`[GETUPDATE] Found ${groups.length} groups for user.`);
 
-    // Fetch latest message for each 1-to-1 conversation, filtering out expired/scheduled
-    let recentMessages = [];
-    try {
-      recentMessages = await Message.aggregate([
-        {
-          $match: {
-            group: null, // Only 1-to-1 chats
-            $or: [{ sender: me._id }, { receiver: me._id }], // Involving the user
-            isScheduled: { $ne: true }, // Exclude pending scheduled messages
-            $or: [
-              // Include non-burnout OR burnout that haven't expired
-              { isBurnout: false },
-              { expireAt: { $gt: now } },
-            ],
-          },
+    // Fetch chats (conversations) the user is participating in
+    const chats = await Chat.find({
+      participants: me._id,
+      isGroup: false,
+    })
+      .populate({
+        path: "lastMessage",
+        match: {
+          isScheduled: { $ne: true }, // Exclude pending scheduled messages
+          $or: [
+            // Include non-burnout OR burnout that haven't expired
+            { isBurnout: false },
+            { expireAt: { $gt: now } },
+          ],
         },
-        { $sort: { time: -1 } },
-        {
-          $group: {
-            _id: {
-              // Group by the other participant
-              $cond: [{ $eq: ["$sender", me._id] }, "$receiver", "$sender"],
-            },
-            lastMessage: { $first: "$$ROOT" }, // Get the latest message for that participant
-          },
-        },
-        { $replaceRoot: { newRoot: "$lastMessage" } }, // Reshape to message document
-        { $sort: { time: -1 } }, // Sort the final list by time
-        { $limit: 50 }, // Limit results
-      ]);
-      console.log(
-        `[GETUPDATE] Aggregation found ${recentMessages.length} recent valid conversations.`
-      );
+      })
+      .populate({
+        path: "participants",
+        match: { _id: { $ne: me._id } }, // Exclude current user from participants
+        select: "fullname email _id profileUrl",
+      })
+      .sort({ "lastMessage.time": -1 })
+      .limit(50);
 
-      if (recentMessages.length > 0) {
-        // Only populate if there are messages
-        await Message.populate(recentMessages, {
-          path: "sender receiver",
-          select: "fullname email _id profileUrl",
-        });
-        console.log(
-          `[GETUPDATE] Populated sender/receiver for recent messages.`
-        );
-      }
-    } catch (aggError) {
-      console.error("[GETUPDATE] Error during message aggregation:", aggError);
-      // Continue with potentially empty recentMessages
-    }
+    console.log(`[GETUPDATE] Found ${chats.length} chats for user.`);
 
-    // Prepare the response messages
-    const responseMessages = recentMessages
-      .map((m) => {
-        const isSenderMe = m.sender?._id.equals(me._id);
-        const otherUser = isSenderMe ? m.receiver : m.sender;
+    // Format the response messages
+    const responseMessages = chats
+      .filter((chat) => chat.lastMessage) // Only include chats with messages
+      .map((chat) => {
+        const otherUser = chat.participants[0]; // We filtered to only include other users
 
         if (!otherUser) {
           console.warn(
-            `[GETUPDATE] Warning: Missing other user details for message ID ${m._id}. Sender: ${m.sender?._id}, Receiver: ${m.receiver?._id}`
+            `[GETUPDATE] Warning: Missing other user details for chat ID ${chat._id}.`
           );
           return null;
         }
@@ -101,9 +79,9 @@ router.post("/getupdate", async (req, res) => {
         return {
           name: otherUser.fullname,
           email: otherUser.email,
-          profileUrl: otherUser.profileUrl ?? "", // Add profileUrl to response
-          message: m.message ?? "", // Plain text
-          time: m.time.toISOString(), // Send as ISO string
+          profileUrl: otherUser.profileUrl ?? "",
+          message: chat.lastMessage.message ?? "",
+          time: chat.lastMessage.time.toISOString(),
         };
       })
       .filter((m) => m !== null);
@@ -148,13 +126,19 @@ router.post("/get-messages", async (req, res) => {
       return res.status(404).json({ error: "One or both users not found" });
     }
 
-    // Fetch messages involving both users
+    // Find or create the chat between these users
+    const chat = await Chat.findOne({
+      participants: { $all: [sender._id, receiver._id] },
+      isGroup: false,
+    });
+
+    if (!chat) {
+      return res.json({ messages: [] }); // No chat exists yet between these users
+    }
+
+    // Fetch messages for this chat
     const messages = await Message.find({
-      group: null,
-      $or: [
-        { sender: sender._id, receiver: receiver._id },
-        { sender: receiver._id, receiver: sender._id },
-      ],
+      chat: chat._id,
       // Filter out ONLY messages that are:
       // 1. Burnout AND Expired
       // 2. Scheduled BY THE OTHER USER AND not yet due

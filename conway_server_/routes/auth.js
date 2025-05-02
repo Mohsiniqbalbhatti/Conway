@@ -103,11 +103,9 @@ router.post("/verify-otp", async (req, res) => {
     const otpData = otpStore.get(email);
 
     if (!otpData) {
-      return res
-        .status(404)
-        .json({
-          message: "OTP not found or expired. Please request a new one.",
-        });
+      return res.status(404).json({
+        message: "OTP not found or expired. Please request a new one.",
+      });
     }
 
     // Check if OTP has expired
@@ -379,6 +377,38 @@ router.post("/resend-otp", async (req, res) => {
   } catch (error) {
     console.error("Resend OTP error:", error);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Logout endpoint
+router.post("/logout", async (req, res) => {
+  try {
+    const { userId, email } = req.body;
+
+    // Basic validation
+    if (!userId || !email) {
+      return res
+        .status(400)
+        .json({ message: "User ID and email are required" });
+    }
+
+    // Verify the user exists
+    const user = await User.findOne({ _id: userId, email });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // In a more complete implementation, you'd also:
+    // 1. Invalidate tokens
+    // 2. Clear any server-side sessions
+    // 3. Log the logout action
+
+    console.log(`User logged out: ${email} (${userId})`);
+
+    res.status(200).json({ message: "Logout successful" });
+  } catch (error) {
+    console.error("Logout error:", error);
+    res.status(500).json({ message: "Server error during logout" });
   }
 });
 

@@ -15,6 +15,7 @@ const userRoutes = require("./routes/user"); // Import new user routes
 const User = require("./models/User");
 const Message = require("./models/Message");
 const Group = require("./models/Group"); // Import Group model
+const Chat = require("./models/Chat"); // Add this line
 
 const app = express();
 const server = http.createServer(app);
@@ -153,12 +154,52 @@ io.on("connection", (socket) => {
           return;
         }
 
+        // Find or create a group chat
+        let chat = await Chat.findOne({
+          group: groupId,
+          isGroup: true,
+        });
+
+        if (!chat) {
+          console.log(
+            "[Socket SEND] No existing group chat found. Creating new chat."
+          );
+          chat = await Chat.create({
+            participants: group.users, // Set participants only on insert
+            group: groupId,
+            isGroup: true,
+          });
+          console.log(`[Socket SEND] New group chat created: ${chat._id}`);
+        } else {
+          console.log(`[Socket SEND] Found existing group chat: ${chat._id}`);
+          // Ensure participants are up-to-date in existing chat (optional, but good practice)
+          if (
+            !chat.participants ||
+            chat.participants.length !== group.users.length
+          ) {
+            // Simple check; more robust check might compare elements
+            console.log(
+              `[Socket SEND] Updating participants in existing group chat ${chat._id}`
+            );
+            chat.participants = group.users;
+            await chat.save(); // Save the update
+          }
+        }
+
+        console.log(`[Socket SEND] Using group chat: ${chat._id}`);
+
+        // Add chat reference to message
+        newMessageData.chat = chat._id;
+
         // Save message to DB
         const newMessage = new Message(newMessageData);
         await newMessage.save();
         console.log(
           `[Socket SEND] Group message saved (ID: ${newMessage._id}, Scheduled: ${newMessage.isScheduled}, Burnout: ${newMessage.isBurnout})`
         );
+
+        // Update the last message reference in the chat
+        await Chat.findByIdAndUpdate(chat._id, { lastMessage: newMessage._id });
 
         // Emit to online group members if NOT scheduled
         if (!newMessage.isScheduled) {
@@ -228,8 +269,30 @@ io.on("connection", (socket) => {
           `[Socket SEND] Found receiver: ${receiver.fullname} (ID: ${receiverId})`
         );
 
+        // Find or create a chat between these users
+        let chat = await Chat.findOne({
+          participants: { $all: [senderId, receiverId] },
+          isGroup: false,
+        });
+
+        if (!chat) {
+          console.log(
+            "[Socket SEND] No existing chat found. Creating new chat."
+          );
+          chat = await Chat.create({
+            participants: [senderId, receiverId],
+            isGroup: false,
+          });
+          console.log(`[Socket SEND] New chat created: ${chat._id}`);
+        } else {
+          console.log(`[Socket SEND] Found existing chat: ${chat._id}`);
+        }
+
+        console.log(`[Socket SEND] Using chat: ${chat._id}`);
+
         newMessageData.receiver = receiver._id;
         newMessageData.group = null;
+        newMessageData.chat = chat._id;
         // Burnout/schedule already added above
 
         // Save message to DB
@@ -238,6 +301,9 @@ io.on("connection", (socket) => {
         console.log(
           `[Socket SEND] Direct message saved (ID: ${newMessage._id}, Scheduled: ${newMessage.isScheduled}, Burnout: ${newMessage.isBurnout})`
         );
+
+        // Update the last message reference in the chat
+        await Chat.findByIdAndUpdate(chat._id, { lastMessage: newMessage._id });
 
         // Send immediately if NOT scheduled
         if (!newMessage.isScheduled) {
@@ -329,7 +395,10 @@ async function checkScheduledAndExpiredMessages() {
       isScheduled: true,
       scheduledAt: { $lte: now },
       deleted_at: null, // Ensure not deleted
-    }).populate("sender receiver group", "fullname email _id users"); // Populate group for group msgs
+    }).populate(
+      "sender receiver group chat",
+      "fullname email _id users participants"
+    ); // Add chat to populate
 
     console.log(
       `[Scheduler] Found ${scheduledMessagesToSend.length} potential scheduled messages to send.`
@@ -342,18 +411,21 @@ async function checkScheduledAndExpiredMessages() {
             msg._id
           }. Scheduled at: ${msg.scheduledAt?.toISOString()}, Current time: ${now.toISOString()}`
         );
+
+        // Update the message status
+        msg.isScheduled = false;
+        await msg.save();
+
         // --- Scheduled Group Message ---
         if (msg.group) {
           const groupId = msg.group._id.toString();
           const senderId = msg.sender?._id.toString();
           const senderName = msg.sender?.fullname || "Unknown";
 
-          if (!senderId || !msg.group.users) {
+          if (!senderId || !msg.chat || !msg.chat.participants) {
             console.error(
-              `[Scheduler] Skipping scheduled group msg ${msg._id} (missing sender/group users).`
+              `[Scheduler] Skipping scheduled group msg ${msg._id} (missing sender/chat).`
             );
-            msg.isScheduled = false;
-            await msg.save(); // Mark as processed even if skipped
             continue;
           }
 
@@ -373,7 +445,7 @@ async function checkScheduledAndExpiredMessages() {
             scheduledAt: msg.scheduledAt?.toISOString(), // Keep original schedule time
           };
 
-          msg.group.users.forEach((userId) => {
+          msg.chat.participants.forEach((userId) => {
             const memberIdStr = userId.toString();
             if (memberIdStr !== senderId) {
               // Don't send to sender
@@ -442,98 +514,34 @@ async function checkScheduledAndExpiredMessages() {
             msg.sent = false;
           }
         }
-
-        // Mark as processed regardless of type
-        msg.isScheduled = false;
-        msg.time = new Date(); // Update time to when it was actually processed/sent
-        console.log(
-          `[Scheduler] Attempting to mark msg ${msg._id} as processed (isScheduled: false).`
-        );
-        await msg.save();
-        console.log(`[Scheduler] Scheduled message ${msg._id} processed.`);
       }
     }
 
-    // --- Handle Expired Burnout Messages (Direct & Group) ---
-    const expiredMessages = await Message.find({
+    // --- Handle Expired Burnout Messages ---
+    // Update to delete expired burnout messages
+    const expiredBurnoutMessages = await Message.find({
       isBurnout: true,
       expireAt: { $lte: now },
-      deleted_at: null, // Process only once (or use a dedicated flag)
-    }).populate("receiver group", "_id users"); // Populate receiver OR group
+      deleted_at: null,
+    });
 
     console.log(
-      `[Scheduler] Found ${expiredMessages.length} potential expired burnout messages.`
+      `[Scheduler] Found ${expiredBurnoutMessages.length} expired burnout messages to clean up.`
     );
 
-    if (expiredMessages.length > 0) {
-      for (const msg of expiredMessages) {
-        console.log(
-          `[Scheduler] Processing expired msg ${
-            msg._id
-          }. Expire at: ${msg.expireAt?.toISOString()}, Current time: ${now.toISOString()}`
-        );
-        // --- Expired Group Message ---
-        if (msg.group && msg.group.users) {
-          const groupId = msg.group._id.toString();
-          console.log(
-            `[Scheduler] Processing expired GROUP message ${msg._id} for group ${groupId}`
-          );
-          const expiryPayload = {
-            messageId: msg._id.toString(),
-            groupId: groupId,
-          };
-
-          msg.group.users.forEach((userId) => {
-            const memberIdStr = userId.toString();
-            const memberSocketId = userSockets.get(memberIdStr);
-            if (memberSocketId) {
-              console.log(
-                `[Scheduler] Emitting groupMessageExpired to member ${memberIdStr} (Socket: ${memberSocketId})`
-              );
-              // Use a NEW event for group expiry
-              io.to(memberSocketId).emit("groupMessageExpired", expiryPayload);
-            }
-          });
-          // Mark as processed (e.g., set deleted_at)
-          msg.deleted_at = now; // Or use a dedicated flag like burnoutProcessedAt
-          await msg.save();
-          console.log(
-            `[Scheduler] Marked expired group message ${msg._id} as processed.`
-          );
-        }
-        // --- Expired Direct Message ---
-        else if (msg.receiver) {
-          const receiverId = msg.receiver._id.toString();
-          console.log(
-            `[Scheduler] Processing expired DIRECT message ${msg._id} for receiver ${receiverId}`
-          );
-          const recipientSocketId = userSockets.get(receiverId);
-          if (recipientSocketId) {
-            console.log(
-              `[Scheduler] Emitting messageExpired for ${msg._id} to receiver ${receiverId}`
-            );
-            io.to(recipientSocketId).emit("messageExpired", {
-              messageId: msg._id.toString(),
-            });
-          } else {
-            console.log(
-              `[Scheduler] Receiver ${receiverId} for expired message ${msg._id} is offline.`
-            );
-          }
-          // Mark as processed
-          msg.deleted_at = now;
-          await msg.save();
-          console.log(
-            `[Scheduler] Marked expired direct message ${msg._id} as processed.`
-          );
-        }
-      }
+    for (const msg of expiredBurnoutMessages) {
+      msg.deleted_at = now;
+      await msg.save();
+      console.log(
+        `[Scheduler] Marked burnout message ${
+          msg._id
+        } as deleted (expired at ${msg.expireAt?.toISOString()}).`
+      );
     }
-  } catch (error) {
-    console.error(
-      "[Scheduler] Error checking scheduled/expired messages:",
-      error
-    );
+
+    console.log(`[Scheduler] Job run completed.`);
+  } catch (err) {
+    console.error("[Scheduler] Error in scheduled job:", err);
   }
 }
 
