@@ -41,6 +41,25 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  isVerified: {
+    type: Boolean,
+    default: false,
+  },
+  pendingEmail: {
+    type: String,
+    default: null,
+  },
+  emailChangeOtp: {
+    type: String,
+    default: null,
+  },
+  emailChangeOtpExpires: {
+    type: Date,
+    default: null,
+  },
 });
+
+// Add index for pendingEmail if needed for lookups, maybe unique sparse?
+// userSchema.index({ pendingEmail: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("User", userSchema);

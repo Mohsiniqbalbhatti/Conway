@@ -33,6 +33,11 @@ const userRoutes = require("./routes/user");
 app.use(cors());
 app.use(bodyParser.json());
 
+// Add a simple root route to check server status
+app.get("/", (req, res) => {
+  res.status(200).json({ status: "ok", message: "Conway server is running" });
+});
+
 io.on("connection", (socket) => {
   console.log("a user connected:", socket.id);
 

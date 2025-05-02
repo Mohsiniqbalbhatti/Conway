@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:pinput/pinput.dart';
 import '../../constants/colors.dart';
 import '../../constants/api_config.dart';
 import '../../widgets/custom_button.dart';
@@ -22,15 +23,9 @@ class OtpVerificationScreen extends StatefulWidget {
 }
 
 class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
-  final List<TextEditingController> _otpControllers = List.generate(
-    6,
-    (_) => TextEditingController(),
-  );
-  final List<FocusNode> _focusNodes = List.generate(
-    6,
-    (_) => FocusNode(),
-  );
-  
+  final TextEditingController _otpController = TextEditingController();
+  final FocusNode _otpFocusNode = FocusNode();
+
   bool _isLoading = false;
   bool _isResending = false;
   String _errorMessage = '';
@@ -47,6 +42,10 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     _remainingTime = 60;
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
       setState(() {
         if (_remainingTime > 0) {
           _remainingTime--;
@@ -59,30 +58,16 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
   @override
   void dispose() {
-    for (var controller in _otpControllers) {
-      controller.dispose();
-    }
-    for (var node in _focusNodes) {
-      node.dispose();
-    }
+    _otpController.dispose();
+    _otpFocusNode.dispose();
     _timer?.cancel();
     super.dispose();
   }
 
-  String get _otpCode {
-    return _otpControllers.map((controller) => controller.text).join();
-  }
-
-  void _onOtpDigitChanged(int index, String value) {
-    if (value.isNotEmpty && index < 5) {
-      _focusNodes[index + 1].requestFocus();
-    }
-  }
-
-  Future<void> _verifyOtp() async {
-    if (_otpCode.length != 6) {
+  Future<void> _verifyOtp(String otpCode) async {
+    if (otpCode.length != 6) {
       setState(() {
-        _errorMessage = 'Please enter all 6 digits';
+        _errorMessage = 'Please enter a valid 6-digit OTP';
       });
       return;
     }
@@ -93,19 +78,20 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     });
 
     try {
-      final response = await http.post(
-        Uri.parse(ApiConfig.verifyOtp),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'email': widget.email,
-          'otp': _otpCode,
-        }),
-      ).timeout(
-        const Duration(seconds: 15),
-        onTimeout: () {
-          throw TimeoutException('Connection timed out. Server might be unreachable.');
-        },
-      );
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.verifyOtp),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': widget.email, 'otp': otpCode}),
+          )
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () {
+              throw TimeoutException(
+                'Connection timed out. Server might be unreachable.',
+              );
+            },
+          );
 
       final responseData = jsonDecode(response.body);
 
@@ -118,10 +104,10 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
             behavior: SnackBarBehavior.floating,
           ),
         );
-        
+
         // Allow time for the toast to be visible before navigating away
         await Future.delayed(const Duration(milliseconds: 1500));
-        
+
         if (!mounted) return;
         Navigator.pop(context);
         widget.onVerificationComplete();
@@ -132,26 +118,29 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
       }
     } catch (e) {
       print('OTP verification error details: $e');
-      
+
       String errorMessage = 'Network error. Please try again later.';
-      
-      if (e.toString().contains('SocketException') || 
+
+      if (e.toString().contains('SocketException') ||
           e.toString().contains('Connection refused') ||
           e.toString().contains('Network is unreachable')) {
-        errorMessage = 'Cannot connect to server. Check your network connection and server address.';
+        errorMessage =
+            'Cannot connect to server. Check your network connection and server address.';
       } else if (e.toString().contains('timed out')) {
         errorMessage = 'Connection timed out. Server might be unreachable.';
       } else if (e is FormatException) {
         errorMessage = 'Invalid response from server. Please try again.';
       }
-      
+
       setState(() {
         _errorMessage = errorMessage;
       });
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -164,37 +153,33 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     });
 
     try {
-      final response = await http.post(
-        Uri.parse(ApiConfig.resendOtp),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'email': widget.email,
-        }),
-      ).timeout(
-        const Duration(seconds: 15),
-        onTimeout: () {
-          throw TimeoutException('Connection timed out. Server might be unreachable.');
-        },
-      );
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.resendOtp),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': widget.email}),
+          )
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () {
+              throw TimeoutException(
+                'Connection timed out. Server might be unreachable.',
+              );
+            },
+          );
 
       final responseData = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
-        // Clear all OTP input fields
-        for (var controller in _otpControllers) {
-          controller.clear();
-        }
-        
-        // Set focus to the first field
-        if (_focusNodes.isNotEmpty) {
-          _focusNodes[0].requestFocus();
-        }
-        
+        // Clear the single OTP controller
+        _otpController.clear();
+        // Request focus back to the Pinput field
+        _otpFocusNode.requestFocus();
         _startTimer();
         setState(() {
           _errorMessage = '';
         });
-        
+
         // Show success toast
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -210,31 +195,49 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
       }
     } catch (e) {
       print('Resend OTP error details: $e');
-      
+
       String errorMessage = 'Network error. Please try again later.';
-      
-      if (e.toString().contains('SocketException') || 
+
+      if (e.toString().contains('SocketException') ||
           e.toString().contains('Connection refused') ||
           e.toString().contains('Network is unreachable')) {
-        errorMessage = 'Cannot connect to server. Check your network connection and server address.';
+        errorMessage =
+            'Cannot connect to server. Check your network connection and server address.';
       } else if (e.toString().contains('timed out')) {
         errorMessage = 'Connection timed out. Server might be unreachable.';
       } else if (e is FormatException) {
         errorMessage = 'Invalid response from server. Please try again.';
       }
-      
+
       setState(() {
         _errorMessage = errorMessage;
       });
     } finally {
-      setState(() {
-        _isResending = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isResending = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final defaultPinTheme = PinTheme(
+      width: 45,
+      height: 50,
+      textStyle: const TextStyle(
+        fontSize: 20,
+        fontWeight: FontWeight.bold,
+        color: Colors.black87,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+    );
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -260,10 +263,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               const SizedBox(height: 20),
               Text(
                 'Enter the 6-digit code sent to',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey[600],
-                ),
+                style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
@@ -276,11 +276,48 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 40),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: List.generate(
-                  6,
-                  (index) => _buildOtpTextField(index),
+              Pinput(
+                length: 6,
+                controller: _otpController,
+                focusNode: _otpFocusNode,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                defaultPinTheme: defaultPinTheme,
+                focusedPinTheme: defaultPinTheme.copyWith(
+                  decoration: defaultPinTheme.decoration!.copyWith(
+                    border: Border.all(color: AppColors.primaryColor, width: 2),
+                  ),
+                ),
+                submittedPinTheme: defaultPinTheme.copyWith(
+                  decoration: defaultPinTheme.decoration!.copyWith(
+                    color: Colors.grey[200],
+                  ),
+                ),
+                separatorBuilder: (index) => const SizedBox(width: 8),
+                hapticFeedbackType: HapticFeedbackType.lightImpact,
+                onCompleted: (pin) {
+                  debugPrint('onCompleted: $pin');
+                  _verifyOtp(pin);
+                },
+                onChanged: (value) {
+                  debugPrint('onChanged: $value');
+                  if (_errorMessage.isNotEmpty && value.isNotEmpty) {
+                    setState(() {
+                      _errorMessage = '';
+                    });
+                  }
+                },
+                cursor: Column(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 9),
+                      width: 22,
+                      height: 1,
+                      color: AppColors.primaryColor,
+                    ),
+                  ],
                 ),
               ),
               if (_errorMessage.isNotEmpty)
@@ -296,7 +333,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               CustomButton(
                 text: 'VERIFY',
                 isLoading: _isLoading,
-                onPressed: _verifyOtp,
+                onPressed: () => _verifyOtp(_otpController.text),
               ),
               const SizedBox(height: 20),
               Row(
@@ -308,16 +345,17 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                   ),
                   _remainingTime > 0
                       ? Text(
-                          'Resend in ${_remainingTime}s',
-                          style: TextStyle(
-                            color: Colors.grey[400],
-                            fontWeight: FontWeight.bold,
-                          ),
-                        )
+                        'Resend in ${_remainingTime}s',
+                        style: TextStyle(
+                          color: Colors.grey[400],
+                          fontWeight: FontWeight.bold,
+                        ),
+                      )
                       : GestureDetector(
-                          onTap: _isResending ? null : _resendOtp,
-                          child: _isResending
-                              ? const SizedBox(
+                        onTap: _isResending ? null : _resendOtp,
+                        child:
+                            _isResending
+                                ? const SizedBox(
                                   height: 16,
                                   width: 16,
                                   child: CircularProgressIndicator(
@@ -325,14 +363,14 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                                     color: AppColors.primaryColor,
                                   ),
                                 )
-                              : const Text(
+                                : const Text(
                                   'Resend',
                                   style: TextStyle(
                                     color: AppColors.primaryColor,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                        ),
+                      ),
                 ],
               ),
             ],
@@ -341,34 +379,4 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
       ),
     );
   }
-
-  Widget _buildOtpTextField(int index) {
-    return SizedBox(
-      width: 45,
-      height: 50,
-      child: TextField(
-        controller: _otpControllers[index],
-        focusNode: _focusNodes[index],
-        keyboardType: TextInputType.number,
-        textAlign: TextAlign.center,
-        maxLength: 1,
-        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-        decoration: InputDecoration(
-          counterText: '',
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: Colors.grey[300]!),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: AppColors.primaryColor, width: 2),
-          ),
-        ),
-        inputFormatters: [
-          FilteringTextInputFormatter.digitsOnly,
-        ],
-        onChanged: (value) => _onOtpDigitChanged(index, value),
-      ),
-    );
-  }
-} 
+}

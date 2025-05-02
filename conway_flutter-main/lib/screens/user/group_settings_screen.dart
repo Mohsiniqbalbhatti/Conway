@@ -60,7 +60,9 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
     try {
       final response = await http
           .get(
-            Uri.parse('${ApiConfig.baseUrl}/groups/${widget.groupId}/details'),
+            Uri.parse(
+              '${ApiConfig.baseUrl}/api/groups/${widget.groupId}/details',
+            ),
             headers: {'Content-Type': 'application/json'},
           )
           .timeout(const Duration(seconds: 15));
@@ -290,198 +292,205 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.all(16.0),
                 child: Center(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      // Group Avatar (editable for admin)
-                      InkWell(
-                        onTap:
-                            _isAdmin
-                                ? _pickAndUpdateGroupImage
-                                : null, // Only allow tap if admin
-                        child: CircleAvatar(
-                          radius: 60,
-                          backgroundColor:
-                              Colors.grey[300], // Placeholder background
-                          backgroundImage:
-                              _profileUrlState != null &&
-                                      _profileUrlState!.isNotEmpty
-                                  ? CachedNetworkImageProvider(
-                                    _profileUrlState!,
-                                  )
-                                  : null,
-                          child:
-                              _profileUrlState == null ||
-                                      _profileUrlState!.isEmpty
-                                  ? Icon(
-                                    Icons
-                                        .group_add, // Icon for adding image or default
-                                    size: 60,
-                                    color: Colors.grey[600],
-                                  )
-                                  : null,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 40.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        // Group Avatar (editable for admin)
+                        InkWell(
+                          onTap:
+                              _isAdmin
+                                  ? _pickAndUpdateGroupImage
+                                  : null, // Only allow tap if admin
+                          child: CircleAvatar(
+                            radius: 60,
+                            backgroundColor:
+                                Colors.grey[300], // Placeholder background
+                            backgroundImage:
+                                _profileUrlState != null &&
+                                        _profileUrlState!.isNotEmpty
+                                    ? CachedNetworkImageProvider(
+                                      _profileUrlState!,
+                                    )
+                                    : null,
+                            child:
+                                _profileUrlState == null ||
+                                        _profileUrlState!.isEmpty
+                                    ? Icon(
+                                      Icons
+                                          .group_add, // Icon for adding image or default
+                                      size: 60,
+                                      color: Colors.grey[600],
+                                    )
+                                    : null,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 16),
+                        const SizedBox(height: 16),
 
-                      // Group Name (editable for admin)
-                      Row(
-                        // Wrap name and edit icon in a Row
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Flexible(
-                            // Allow name to wrap if long
-                            child: Text(
-                              _groupNameState, // Display current name from state
-                              style: const TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
+                        // Group Name (editable for admin)
+                        Row(
+                          // Wrap name and edit icon in a Row
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Flexible(
+                              // Allow name to wrap if long
+                              child: Text(
+                                _groupNameState, // Display current name from state
+                                style: const TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
-                          ),
-                          if (_isAdmin)
-                            IconButton(
-                              icon: const Icon(Icons.edit, size: 18),
-                              onPressed: () {
-                                _showEditNameDialog();
-                              },
-                            ),
-                        ],
-                      ),
-                      Text(
-                        // Use _createdAtState, provide fallback text if null
-                        _createdAtState != null
-                            ? 'Created on ${DateFormat.yMMMd().format(_createdAtState!)}'
-                            : 'Creation date unavailable',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                      ),
-
-                      const SizedBox(height: 20),
-                      const Divider(),
-                      const SizedBox(height: 10),
-
-                      // Members Section Header
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'Members (${_membersState.length})',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
+                            if (_isAdmin)
+                              IconButton(
+                                icon: const Icon(Icons.edit, size: 18),
+                                onPressed: () {
+                                  _showEditNameDialog();
+                                },
+                              ),
+                          ],
+                        ),
+                        Text(
+                          // Use _createdAtState, provide fallback text if null
+                          _createdAtState != null
+                              ? 'Created on ${DateFormat.yMMMd().format(_createdAtState!)}'
+                              : 'Creation date unavailable',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 10),
 
-                      // --- Display Real Members ---
-                      _membersState.isEmpty
-                          ? const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 20.0),
-                            child: Text(
-                              'No members found.',
-                              style: TextStyle(color: Colors.grey),
+                        const SizedBox(height: 20),
+                        const Divider(),
+                        const SizedBox(height: 10),
+
+                        // Members Section Header
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Members (${_membersState.length})',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
                             ),
-                          )
-                          : ListView.builder(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            itemCount: _membersState.length,
-                            itemBuilder: (context, index) {
-                              final member = _membersState[index];
-                              final memberId = member['_id'] as String?;
-                              final memberProfileUrl =
-                                  member['profileUrl'] as String?;
-                              final bool hasMemberProfile =
-                                  memberProfileUrl != null &&
-                                  memberProfileUrl.isNotEmpty;
-                              // Check if this member is the creator
-                              final bool isMemberAdmin =
-                                  memberId != null && memberId == _creatorId;
+                          ),
+                        ),
+                        const SizedBox(height: 10),
 
-                              return ListTile(
-                                leading: CircleAvatar(
-                                  radius: 20,
-                                  backgroundColor:
-                                      Colors.grey[200], // Background for avatar
-                                  backgroundImage:
-                                      hasMemberProfile
-                                          ? CachedNetworkImageProvider(
-                                            memberProfileUrl,
+                        // --- Display Real Members ---
+                        _membersState.isEmpty
+                            ? const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 20.0),
+                              child: Text(
+                                'No members found.',
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            )
+                            : ListView.builder(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              itemCount: _membersState.length,
+                              itemBuilder: (context, index) {
+                                final member = _membersState[index];
+                                final memberId = member['_id'] as String?;
+                                final memberProfileUrl =
+                                    member['profileUrl'] as String?;
+                                final bool hasMemberProfile =
+                                    memberProfileUrl != null &&
+                                    memberProfileUrl.isNotEmpty;
+                                // Check if this member is the creator
+                                final bool isMemberAdmin =
+                                    memberId != null && memberId == _creatorId;
+
+                                return ListTile(
+                                  leading: CircleAvatar(
+                                    radius: 20,
+                                    backgroundColor:
+                                        Colors
+                                            .grey[200], // Background for avatar
+                                    backgroundImage:
+                                        hasMemberProfile
+                                            ? CachedNetworkImageProvider(
+                                              memberProfileUrl,
+                                            )
+                                            : null,
+                                    child:
+                                        !hasMemberProfile
+                                            ? const Icon(Icons.person, size: 20)
+                                            : null,
+                                  ),
+                                  title: Text(
+                                    member['fullname'] ?? 'Unknown User',
+                                  ),
+                                  subtitle: Text(member['email'] ?? ''),
+                                  // Display "Admin" chip if the member is the creator
+                                  trailing:
+                                      isMemberAdmin
+                                          ? const Chip(
+                                            label: Text('Admin'),
+                                            backgroundColor: Colors.blueGrey,
+                                            labelStyle: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 10,
+                                            ),
+                                            padding: EdgeInsets.symmetric(
+                                              horizontal: 4,
+                                              vertical: 0,
+                                            ),
                                           )
                                           : null,
-                                  child:
-                                      !hasMemberProfile
-                                          ? const Icon(Icons.person, size: 20)
-                                          : null,
-                                ),
-                                title: Text(
-                                  member['fullname'] ?? 'Unknown User',
-                                ),
-                                subtitle: Text(member['email'] ?? ''),
-                                // Display "Admin" chip if the member is the creator
-                                trailing:
-                                    isMemberAdmin
-                                        ? const Chip(
-                                          label: Text('Admin'),
-                                          backgroundColor: Colors.blueGrey,
-                                          labelStyle: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 10,
-                                          ),
-                                          padding: EdgeInsets.symmetric(
-                                            horizontal: 4,
-                                            vertical: 0,
-                                          ),
-                                        )
-                                        : null,
-                                // TODO: Add option for admin to remove member?
-                              );
+                                  // TODO: Add option for admin to remove member?
+                                );
+                              },
+                            ),
+                        // --- End Display Real Members ---
+
+                        // Add Members Button (Admin only)
+                        if (_isAdmin)
+                          TextButton.icon(
+                            icon: const Icon(Icons.add),
+                            label: const Text('Add Members'),
+                            onPressed: () {
+                              _navigateToAddMembersScreen();
                             },
                           ),
-                      // --- End Display Real Members ---
 
-                      // Add Members Button (Admin only)
-                      if (_isAdmin)
+                        const SizedBox(height: 20),
+                        const Divider(),
+                        const SizedBox(height: 20),
+
+                        // Action Buttons
                         TextButton.icon(
-                          icon: const Icon(Icons.add),
-                          label: const Text('Add Members'),
-                          onPressed: () {
-                            _navigateToAddMembersScreen();
-                          },
-                        ),
-
-                      const SizedBox(height: 20),
-                      const Divider(),
-                      const SizedBox(height: 20),
-
-                      // Action Buttons
-                      TextButton.icon(
-                        icon: Icon(Icons.exit_to_app, color: Colors.red[700]),
-                        label: Text(
-                          'Leave Group',
-                          style: TextStyle(color: Colors.red[700]),
-                        ),
-                        onPressed: () {
-                          /* TODO: Implement leave group confirmation */
-                        },
-                      ),
-
-                      if (_isAdmin)
-                        TextButton.icon(
-                          icon: Icon(
-                            Icons.delete_forever,
-                            color: Colors.red[700],
-                          ),
+                          icon: Icon(Icons.exit_to_app, color: Colors.red[700]),
                           label: Text(
-                            'Delete Group',
+                            'Leave Group',
                             style: TextStyle(color: Colors.red[700]),
                           ),
                           onPressed: () {
-                            /* TODO: Implement delete group confirmation */
+                            /* TODO: Implement leave group confirmation */
                           },
                         ),
-                    ],
+
+                        if (_isAdmin)
+                          TextButton.icon(
+                            icon: Icon(
+                              Icons.delete_forever,
+                              color: Colors.red[700],
+                            ),
+                            label: Text(
+                              'Delete Group',
+                              style: TextStyle(color: Colors.red[700]),
+                            ),
+                            onPressed: () {
+                              /* TODO: Implement delete group confirmation */
+                            },
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),

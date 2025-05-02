@@ -108,7 +108,7 @@ class HomeScreenState extends State<HomeScreen>
     try {
       final response = await http
           .post(
-            Uri.parse('${ApiConfig.baseUrl}/getupdate'),
+            Uri.parse('${ApiConfig.baseUrl}/api/getupdate'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'myemail': _currentUser!.email}),
           )
@@ -126,8 +126,6 @@ class HomeScreenState extends State<HomeScreen>
 
         // Process chats (fetching profile URL from user data)
         final Map<String, Map<String, dynamic>> userChats = {};
-        final List<Future<void>> userFetchFutures =
-            []; // For fetching missing user details
 
         for (var msgData in messages) {
           if (msgData is Map<String, dynamic>) {
@@ -420,13 +418,28 @@ class HomeScreenState extends State<HomeScreen>
                       ? const Icon(Icons.person, size: 22, color: Colors.white)
                       : null,
             ),
-            onPressed:
-                () => Navigator.push(
+            onPressed: () async {
+              final user = await DBHelper().getUser();
+
+              if (user != null && context.mounted) {
+                Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => SettingScreen(onLogout: widget.onLogout),
+                    builder:
+                        (_) => SettingScreen(
+                          currentUser: user,
+                          onLogout: widget.onLogout,
+                        ),
                   ),
-                ).then((_) => _loadUserData()),
+                ).then((_) {
+                  _loadUserData();
+                });
+              } else if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Could not load user data.")),
+                );
+              }
+            },
           ),
         ],
       ),
@@ -537,6 +550,7 @@ class HomeScreenState extends State<HomeScreen>
           right: 16,
           bottom: 16,
           child: FloatingActionButton(
+            heroTag: 'fab_chat',
             onPressed: () {
               Navigator.push(
                 context,
@@ -660,6 +674,7 @@ class HomeScreenState extends State<HomeScreen>
           right: 16,
           bottom: 16,
           child: FloatingActionButton(
+            heroTag: 'fab_group',
             onPressed: () {
               Navigator.push(
                 context,

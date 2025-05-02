@@ -11,57 +11,74 @@ import 'package:http_parser/http_parser.dart'; // Import for MediaType
 import '../../constants/api_config.dart'; // For API endpoint
 import 'package:cached_network_image/cached_network_image.dart'; // For image display
 import '../../models/user.dart' as conway_user; // Alias User model
+import 'user_profile_screen.dart'; // Renamed profile screen
+
+// Define colors for consistency outside the class
+const Color primaryColor = Color(0xFF19BFB7);
+const Color lightBackgroundColor = Color(
+  0xFFFAFAFA,
+); // Slightly different shade for better contrast
+const Color textFieldFillColor = Color(0xFFF0F0F0); // Adjusted fill color
+const Color errorColor = Colors.redAccent;
+const Color destructiveColor = Color(0xFFD32F2F); // Material Red 700
 
 class SettingScreen extends StatefulWidget {
   final VoidCallback? onLogout;
+  final conway_user.User currentUser; // Add currentUser field
 
-  const SettingScreen({super.key, this.onLogout}); // Use super parameters
+  const SettingScreen({
+    super.key,
+    this.onLogout,
+    required this.currentUser, // Require currentUser in constructor
+  });
 
   @override
-  State<SettingScreen> createState() => SettingScreenState(); // Make state public
+  State<SettingScreen> createState() => SettingScreenState();
 }
 
 class SettingScreenState extends State<SettingScreen> {
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _usernameController = TextEditingController();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
+  // Existing controllers
+  // final TextEditingController _nameController = TextEditingController(); // Moved to EditProfileScreen
+  // final TextEditingController _usernameController = TextEditingController(); // Moved to EditProfileScreen
+  // final TextEditingController _emailController = TextEditingController(); // Moved to EditProfileScreen
 
-  final Color primaryColor = const Color(0xFF19BFB7);
-  final Color secondaryColor = const Color(0xFF59A52C);
+  // New controllers for password change
+  final TextEditingController _currentPasswordController =
+      TextEditingController();
+  final TextEditingController _newPasswordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
+  final GlobalKey<FormState> _passwordFormKey = GlobalKey<FormState>();
+  bool _isChangingPassword = false;
+  String _changePasswordError = '';
+  bool _obscureCurrentPassword = true;
+  bool _obscureNewPassword = true;
+  bool _obscureConfirmPassword = true;
 
   final SocketService _socketService = SocketService();
-  final ImagePicker _picker = ImagePicker(); // Initialize ImagePicker
+  final ImagePicker _picker = ImagePicker();
 
-  conway_user.User? _currentUser;
-  File? _selectedImageFile; // To hold the selected image file
-  bool _isUploading = false; // To show loading indicator
+  // conway_user.User? _currentUser; // Remove internal state variable
+  File? _selectedImageFile;
+  bool _isUploading = false;
 
   @override
   void initState() {
     super.initState();
-    _loadUserData();
+    // _loadUserData(); // Remove call to load user data
   }
 
-  Future<void> _loadUserData() async {
-    // Ensure user is authenticated
-    await AuthGuard.isAuthenticated(context);
-    final user = await DBHelper().getUser();
-    if (mounted && user != null) {
-      setState(() {
-        _currentUser = user;
-        _emailController.text = user.email;
-        // TODO: Load fullname and username if available from backend/DB later
-        // _nameController.text = user.fullname;
-        // _usernameController.text = user.username;
-      });
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to load user data.')),
-      );
-      // Maybe navigate back or handle error
-    }
-  }
+  // Future<void> _loadUserData() async { // Remove entire method
+  //   await AuthGuard.isAuthenticated(context);
+  //   final user = await DBHelper().getUser();
+  //   if (mounted && user != null) {
+  //     setState(() {
+  //       _currentUser = user;
+  //     });
+  //   } else if (mounted) {
+  //     // ... error handling ...
+  //   }
+  // }
 
   Future<void> _pickImage(ImageSource source) async {
     try {
@@ -90,7 +107,7 @@ class SettingScreenState extends State<SettingScreen> {
   }
 
   Future<void> _uploadProfilePicture() async {
-    if (_selectedImageFile == null || _currentUser == null) return;
+    if (_selectedImageFile == null) return; // Check only for selected file
 
     setState(() {
       _isUploading = true;
@@ -106,7 +123,8 @@ class SettingScreenState extends State<SettingScreen> {
       );
 
       // Add the user email to the request body
-      request.fields['userEmail'] = _currentUser!.email;
+      request.fields['userEmail'] =
+          widget.currentUser.email; // Use widget.currentUser
 
       // Add the image file
       request.files.add(
@@ -134,27 +152,43 @@ class SettingScreenState extends State<SettingScreen> {
         final newProfileUrl = responseData['profileUrl'] as String?;
 
         if (newProfileUrl != null && mounted) {
-          // Update local user object
-          final updatedUser = conway_user.User(
-            id: _currentUser!.id,
-            email: _currentUser!.email,
-            profileUrl: newProfileUrl, // Use the new URL
-            // TODO: Add fullname/username if available
+          // Update the user details in the local database
+          await DBHelper().updateUserDetails(
+            widget.currentUser.id, // Use widget.currentUser
+            profileUrl: newProfileUrl,
           );
-          // Update user in local DB
-          await DBHelper().insertUser(updatedUser);
-          // Update state
+
+          // Create updated user object locally for immediate UI update
+          // This part becomes tricky as we shouldn't modify the passed-in widget.currentUser directly.
+          // The parent screen that owns the user state should be responsible for refreshing.
+          // For now, just update the DB and rely on potential refresh when popping back.
+          // Consider using a state management solution (Provider, Riverpod, Bloc)
+          // to handle this more cleanly across screens.
+          // final updatedUser = conway_user.User(
+          //   id: widget.currentUser.id,
+          //   email: widget.currentUser.email,
+          //   fullname: widget.currentUser.fullname, // Assume fullname hasn't changed here
+          //   profileUrl: newProfileUrl,
+          // );
+          // setState(() {
+          //   // Cannot update _currentUser anymore
+          //   // Maybe force a refresh on the parent?
+          //   _selectedImageFile = null;
+          // });
+
+          // We can update the selected image file state though
           setState(() {
-            _currentUser = updatedUser;
             _selectedImageFile =
-                null; // Clear selected file after successful upload
+                null; // Clear selection after successful upload
           });
+
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Profile picture updated!'),
               backgroundColor: Colors.green,
             ),
           );
+          // Optionally: Could return `true` when popping if the parent needs to know
         } else {
           throw Exception('Upload successful but no profile URL returned.');
         }
@@ -179,13 +213,87 @@ class SettingScreenState extends State<SettingScreen> {
     }
   }
 
+  Future<void> _changePassword() async {
+    if (!_passwordFormKey.currentState!.validate()) {
+      return; // Form validation failed
+    }
+    // Check for user removed - using widget.currentUser directly
+    // if (widget.currentUser == null) { // This check is technically unnecessary now
+    //   setState(() => _changePasswordError = 'User data not loaded.');
+    //   return;
+    // }
+
+    setState(() {
+      _isChangingPassword = true;
+      _changePasswordError = '';
+    });
+
+    try {
+      final response = await http
+          .put(
+            Uri.parse(ApiConfig.changePassword), // Use new API endpoint
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'userId': widget.currentUser.id, // Use widget.currentUser
+              'currentPassword': _currentPasswordController.text,
+              'newPassword': _newPasswordController.text,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final responseData = jsonDecode(response.body);
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200 && responseData['success'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Password changed successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        // Clear password fields after success
+        _currentPasswordController.clear();
+        _newPasswordController.clear();
+        _confirmPasswordController.clear();
+        // Hide keyboard
+        FocusScope.of(context).unfocus();
+      } else {
+        setState(() {
+          _changePasswordError =
+              responseData['error'] ?? 'Failed to change password.';
+        });
+        // Show error SnackBar
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_changePasswordError),
+            backgroundColor: errorColor,
+          ),
+        );
+      }
+    } catch (e) {
+      print('Change Password error: $e');
+      if (mounted) {
+        setState(() {
+          _changePasswordError = 'Network error. Please try again.';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isChangingPassword = false;
+        });
+      }
+    }
+  }
+
   Future<void> _logout() async {
     try {
-      // Get the current user
-      final user = await DBHelper().getUser();
-      if (user == null) {
-        throw Exception('No user found to logout');
-      }
+      // Use passed-in user data
+      // final user = await DBHelper().getUser(); // No need to fetch again
+      // if (user == null) { // Check removed
+      //   throw Exception('No user found to logout');
+      // }
 
       // Disconnect Socket FIRST
       print("[SettingScreen] Disconnecting socket before logout.");
@@ -196,7 +304,10 @@ class SettingScreenState extends State<SettingScreen> {
         final response = await http.post(
           Uri.parse(ApiConfig.logout),
           headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'email': user.email, 'userId': user.id}),
+          body: jsonEncode({
+            'email': widget.currentUser.email, // Use widget.currentUser
+            'userId': widget.currentUser.id, // Use widget.currentUser
+          }),
         );
 
         if (response.statusCode != 200) {
@@ -220,344 +331,438 @@ class SettingScreenState extends State<SettingScreen> {
         widget.onLogout!();
       }
 
-      // Show success message
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Logged out successfully")));
-
-      // Navigate to the auth wrapper which will show login screen
-      Navigator.of(context).pushNamedAndRemoveUntil('/auth', (route) => false);
+      // Show success message (ensure context is still valid)
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Logged out successfully")),
+        );
+        // Navigate BACK instead of pushing /auth
+        // Let the state change handle showing the LoginScreen
+        // Ensure HomeScreen (or its parent) correctly handles rebuild
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
     } catch (e) {
       print("Logout error: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error logging out: ${e.toString()}")),
-      );
+      if (mounted) {
+        // Add mounted check before showing SnackBar
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error logging out: ${e.toString()}")),
+        );
+      }
     }
   }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _usernameController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
+    // Dispose new controllers
+    _currentPasswordController.dispose();
+    _newPasswordController.dispose();
+    _confirmPasswordController.dispose();
+    // Existing disposals (remove unused ones)
+    // _nameController.dispose();
+    // _usernameController.dispose();
+    // _emailController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Get current profile URL, handling null
-    final profileUrl = _currentUser?.profileUrl;
+    // Use widget.currentUser directly
+    final profileUrl = widget.currentUser.profileUrl;
     final hasProfileUrl = profileUrl != null && profileUrl.isNotEmpty;
 
     return Scaffold(
+      backgroundColor: lightBackgroundColor, // Use light background
       appBar: AppBar(
-        backgroundColor: primaryColor,
-        title: const Text('Settings', style: TextStyle(color: Colors.white)),
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context), // Add back button
+        title: const Text(
+          'Settings',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
         ),
+        backgroundColor: primaryColor,
+        elevation: 1, // Add subtle elevation
+        iconTheme: const IconThemeData(
+          color: Colors.white,
+        ), // Keep back arrow white
       ),
-      body:
-          _currentUser ==
-                  null // Show loading indicator until user data is loaded
-              ? Center(child: CircularProgressIndicator(color: primaryColor))
-              : SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24.0,
-                    vertical: 20.0,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      // Profile picture with edit button
-                      Stack(
-                        alignment: Alignment.bottomRight,
-                        children: [
-                          CircleAvatar(
-                            radius: 50,
-                            backgroundColor: Colors.grey[300],
-                            // Display selected image temporarily or network image
-                            backgroundImage:
-                                _selectedImageFile != null
-                                    ? FileImage(_selectedImageFile!)
-                                        as ImageProvider
-                                    : (hasProfileUrl
-                                        ? CachedNetworkImageProvider(profileUrl)
-                                        : null),
-                            child:
-                                _selectedImageFile == null && !hasProfileUrl
-                                    ? const Icon(
-                                      Icons.person,
-                                      size: 50,
-                                      color: Colors.white,
-                                    )
-                                    : null,
-                          ),
-                          if (_isUploading)
-                            const Positioned.fill(
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            ),
-                          // Edit button overlay
-                          Positioned(
-                            bottom: 0,
-                            right: 0,
-                            child: CircleAvatar(
-                              radius: 16,
-                              backgroundColor: secondaryColor,
-                              child: IconButton(
-                                padding: EdgeInsets.zero,
-                                icon: const Icon(
-                                  Icons.edit,
-                                  color: Colors.white,
-                                  size: 16,
-                                ),
-                                onPressed:
-                                    _isUploading
-                                        ? null
-                                        : () {
-                                          // Show options to pick from camera or gallery
-                                          showModalBottomSheet(
-                                            context: context,
-                                            builder:
-                                                (context) => SafeArea(
-                                                  child: Wrap(
-                                                    children: <Widget>[
-                                                      ListTile(
-                                                        leading: const Icon(
-                                                          Icons.photo_library,
-                                                        ),
-                                                        title: const Text(
-                                                          'Photo Library',
-                                                        ),
-                                                        onTap: () {
-                                                          _pickImage(
-                                                            ImageSource.gallery,
-                                                          );
-                                                          Navigator.of(
-                                                            context,
-                                                          ).pop();
-                                                        },
-                                                      ),
-                                                      ListTile(
-                                                        leading: const Icon(
-                                                          Icons.photo_camera,
-                                                        ),
-                                                        title: const Text(
-                                                          'Camera',
-                                                        ),
-                                                        onTap: () {
-                                                          _pickImage(
-                                                            ImageSource.camera,
-                                                          );
-                                                          Navigator.of(
-                                                            context,
-                                                          ).pop();
-                                                        },
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                          );
-                                        },
-                              ),
-                            ),
-                          ),
-                        ],
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(
+          horizontal: 16.0,
+          vertical: 20.0,
+        ), // Adjusted padding
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // --- Profile Section --- (Using Card for better separation)
+            Card(
+              elevation: 2,
+              margin: const EdgeInsets.only(bottom: 25), // Space below card
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              clipBehavior: Clip.antiAlias, // Clip content to shape
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                leading: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    CircleAvatar(
+                      radius: 30,
+                      backgroundColor: Colors.grey.shade300,
+                      backgroundImage:
+                          hasProfileUrl
+                              ? CachedNetworkImageProvider(profileUrl!)
+                              : null,
+                      child:
+                          !hasProfileUrl
+                              ? Icon(
+                                Icons.person,
+                                size: 30,
+                                color: Colors.grey[600],
+                              )
+                              : null,
+                    ),
+                    // Show selected image preview before upload
+                    if (_selectedImageFile != null)
+                      CircleAvatar(
+                        radius: 30,
+                        backgroundImage: FileImage(_selectedImageFile!),
                       ),
-                      const SizedBox(height: 24),
-
-                      // Full Name
-                      TextField(
-                        controller: _nameController,
-                        decoration: InputDecoration(
-                          labelText: 'Full Name',
-                          prefixIcon: const Icon(
-                            Icons.person,
-                            color: Colors.black54,
-                          ),
-                          filled: true,
-                          fillColor: Colors.grey[50],
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey[200]!),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(
-                              color: primaryColor,
-                              width: 1.5,
+                    if (_isUploading)
+                      const Positioned.fill(
+                        child: CircleAvatar(
+                          // Add background to progress indicator
+                          radius: 30,
+                          backgroundColor: Colors.black45,
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color:
+                                  Colors
+                                      .white, // White indicator on dark background
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 16),
-
-                      // Username
-                      TextField(
-                        controller: _usernameController,
-                        decoration: InputDecoration(
-                          labelText: 'Username',
-                          prefixIcon: const Icon(
-                            Icons.person_outline,
-                            color: Colors.black54,
-                          ),
-                          filled: true,
-                          fillColor: Colors.grey[50],
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey[200]!),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(
-                              color: primaryColor,
-                              width: 1.5,
-                            ),
+                    // Add an icon button to trigger image picking
+                    Positioned(
+                      bottom: -5,
+                      right: -10,
+                      child: IconButton(
+                        icon: CircleAvatar(
+                          radius: 12,
+                          backgroundColor: primaryColor,
+                          child: Icon(
+                            Icons.edit,
+                            size: 14,
+                            color: Colors.white,
                           ),
                         ),
+                        onPressed: () => _pickImage(ImageSource.gallery),
+                        tooltip: 'Change profile picture',
                       ),
-                      const SizedBox(height: 16),
-
-                      // Email
-                      TextField(
-                        controller: _emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        readOnly:
-                            true, // Email likely shouldn't be changed here
-                        decoration: InputDecoration(
-                          labelText: 'Email',
-                          prefixIcon: const Icon(
-                            Icons.email,
-                            color: Colors.black54,
-                          ),
-                          filled: true,
-                          fillColor: Colors.grey[100], // Indicate read-only
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey[200]!),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey[200]!),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // Password (Consider a "Change Password" button instead of field)
-                      TextField(
-                        controller: _passwordController,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: 'New Password (Optional)',
-                          prefixIcon: const Icon(
-                            Icons.lock,
-                            color: Colors.black54,
-                          ),
-                          filled: true,
-                          fillColor: Colors.grey[50],
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey[200]!),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(
-                              color: primaryColor,
-                              width: 1.5,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-
-                      // Save changes button
-                      Container(
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [primaryColor, secondaryColor],
-                            begin: Alignment.centerLeft,
-                            end: Alignment.centerRight,
-                          ),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: ElevatedButton(
-                          onPressed: () {
-                            // TODO: Save changes (Name, Username, Password)
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.transparent,
-                            shadowColor: Colors.transparent,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: const Text(
-                            'Save Changes',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // Delete account button
-                      OutlinedButton(
-                        onPressed: () {
-                          // TODO: Show confirmation and delete account
-                        },
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Colors.red),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          minimumSize: const Size(double.infinity, 50),
-                        ),
-                        child: const Text(
-                          'Delete Account',
-                          style: TextStyle(
-                            color: Colors.red,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-
-                      // Logout button
-                      OutlinedButton(
-                        onPressed: _logout,
-                        style: OutlinedButton.styleFrom(
-                          side: BorderSide(color: primaryColor),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          minimumSize: const Size(double.infinity, 50),
-                        ),
-                        child: Text(
-                          'Logout',
-                          style: TextStyle(
-                            color: primaryColor,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
+                  ],
+                ),
+                title: Text(
+                  widget.currentUser.fullname ??
+                      'No Name', // Use widget.currentUser
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w500,
+                    fontSize: 17,
                   ),
                 ),
+                subtitle: Text(
+                  widget.currentUser.email,
+                ), // Use widget.currentUser
+                trailing: IconButton(
+                  icon: Icon(
+                    Icons.edit_outlined,
+                    color: primaryColor,
+                  ), // Outlined edit icon
+                  tooltip: 'Edit Profile',
+                  onPressed: () {
+                    // Removed null check, currentUser is required
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder:
+                            (_) => EditProfileScreen(
+                              currentUser:
+                                  widget.currentUser, // Pass widget.currentUser
+                            ),
+                      ),
+                    ).then((changesMade) {
+                      // If changes were made (e.g., name updated), we should ideally refresh the user data
+                      // This currently relies on the parent screen refreshing if needed.
+                      // A better approach uses state management (Provider, Riverpod, etc.)
+                      // to update the user state globally.
+                      // For now, we can trigger a manual refresh of the parent if changes were made
+                      if (changesMade == true && mounted) {
+                        // Potentially pop and push again, or use a state management solution.
+                        // Simplest for now: just note that parent might need refresh.
+                      }
+                    });
+                  },
+                ),
+                // onTap: () => _pickImage(ImageSource.gallery), // Moved to IconButton overlay
               ),
+            ),
+            // const Divider(height: 30), // Remove divider, using Card now
+
+            // --- Change Password Section Title ---
+            Padding(
+              padding: const EdgeInsets.only(
+                left: 4.0,
+                bottom: 15.0,
+              ), // Indent title slightly
+              child: Text(
+                'Change Password',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey.shade800,
+                ),
+              ),
+            ),
+            Form(
+              key: _passwordFormKey,
+              child: Column(
+                children: [
+                  _buildPasswordTextField(
+                    controller: _currentPasswordController,
+                    labelText: 'Current Password',
+                    isObscured: _obscureCurrentPassword,
+                    toggleVisibility:
+                        () => setState(
+                          () =>
+                              _obscureCurrentPassword =
+                                  !_obscureCurrentPassword,
+                        ),
+                  ),
+                  const SizedBox(height: 15), // Consistent spacing
+                  _buildPasswordTextField(
+                    controller: _newPasswordController,
+                    labelText: 'New Password',
+                    isObscured: _obscureNewPassword,
+                    toggleVisibility:
+                        () => setState(
+                          () => _obscureNewPassword = !_obscureNewPassword,
+                        ),
+                    validator: (value) {
+                      if (value == null || value.isEmpty)
+                        return 'New password cannot be empty.';
+                      if (value.length < 8)
+                        return 'Password must be at least 8 characters.';
+                      // Add more complex validation if needed
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 15), // Consistent spacing
+                  _buildPasswordTextField(
+                    controller: _confirmPasswordController,
+                    labelText: 'Confirm New Password',
+                    isObscured: _obscureConfirmPassword,
+                    toggleVisibility:
+                        () => setState(
+                          () =>
+                              _obscureConfirmPassword =
+                                  !_obscureConfirmPassword,
+                        ),
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Please confirm your new password.';
+                      }
+                      if (value != _newPasswordController.text)
+                        return 'Passwords do not match.';
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 25), // Space before button
+                  if (_changePasswordError.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(
+                        bottom: 15,
+                      ), // Space below error
+                      child: Text(
+                        _changePasswordError,
+                        style: TextStyle(color: errorColor, fontSize: 14),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  SizedBox(
+                    // Control button width
+                    width: double.infinity,
+                    height: 50,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: primaryColor,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onPressed: _isChangingPassword ? null : _changePassword,
+                      child:
+                          _isChangingPassword
+                              ? const SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2.5,
+                                ),
+                              )
+                              : const Text(
+                                'CHANGE PASSWORD',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                    ),
+                  ),
+                  // CustomButton( // Remove old button
+                  //   text: 'CHANGE PASSWORD',
+                  //   isLoading: _isChangingPassword,
+                  //   onPressed: _changePassword,
+                  // ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 30), // Space before logout
+            const Divider(height: 20), // Divider before logout
+            // --- Logout Button (OutlinedButton with Confirmation) ---
+            Center(
+              // Center the button horizontally
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 10.0,
+                ), // Add vertical padding
+                child: OutlinedButton.icon(
+                  icon: Icon(Icons.logout, color: destructiveColor),
+                  label: Text(
+                    'Logout',
+                    style: TextStyle(
+                      color: destructiveColor,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(
+                      color: destructiveColor.withOpacity(0.5),
+                    ), // Border color
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 30,
+                      vertical: 12,
+                    ),
+                    foregroundColor: destructiveColor.withOpacity(
+                      0.1,
+                    ), // Splash color
+                  ),
+                  onPressed: () => _showLogoutConfirmationDialog(context),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- Confirmation Dialog for Logout ---
+  Future<void> _showLogoutConfirmationDialog(BuildContext context) async {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false, // User must tap button!
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Confirm Logout'),
+          content: const SingleChildScrollView(
+            child: ListBody(
+              children: <Widget>[Text('Are you sure you want to log out?')],
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop(); // Dismiss the dialog
+              },
+            ),
+            TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: destructiveColor,
+              ), // Style the logout action
+              child: const Text('Logout'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop(); // Dismiss the dialog
+                _logout(); // Proceed with logout
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Helper for password fields (updated style)
+  Widget _buildPasswordTextField({
+    required TextEditingController controller,
+    required String labelText,
+    required bool isObscured,
+    required VoidCallback toggleVisibility,
+    FormFieldValidator<String>? validator,
+  }) {
+    return TextFormField(
+      controller: controller,
+      obscureText: isObscured,
+      decoration: InputDecoration(
+        labelText: labelText,
+        filled: true, // Use filled style
+        fillColor: textFieldFillColor,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12), // Rounded corners
+          borderSide: BorderSide.none, // No border initially
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey.shade300), // Subtle border
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(
+            color: primaryColor,
+            width: 1.5,
+          ), // Highlight focus
+        ),
+        prefixIcon: const Icon(
+          Icons.lock_outline,
+          size: 20,
+        ), // Slightly smaller icon
+        suffixIcon: IconButton(
+          icon: Icon(
+            isObscured
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined,
+            size: 20, // Smaller icon
+            color: Colors.grey.shade600, // Subtle color
+          ),
+          onPressed: toggleVisibility,
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          vertical: 16,
+          horizontal: 12,
+        ), // Adjust padding
+      ),
+      validator: validator,
     );
   }
 }

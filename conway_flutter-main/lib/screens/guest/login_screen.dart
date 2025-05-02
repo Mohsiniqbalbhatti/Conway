@@ -24,6 +24,7 @@ class _LoginScreenState extends State<LoginScreen> {
       TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _isPasswordObscured = true; // State variable for password visibility
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn();
   final SocketService _socketService = SocketService(); // Get instance
@@ -80,6 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
           id: userIdString,
           email: userJson['email'] as String? ?? '',
           profileUrl: userJson['profileUrl'] as String? ?? '',
+          fullname: userJson['fullname'] as String? ?? '',
         );
 
         await DBHelper().insertUser(userFromServer);
@@ -189,6 +191,7 @@ class _LoginScreenState extends State<LoginScreen> {
             id: userIdString,
             email: userJson['email'] as String? ?? '',
             profileUrl: userJson['profileUrl'] as String? ?? '',
+            fullname: userJson['fullname'] as String? ?? '',
           );
 
           await DBHelper().insertUser(user);
@@ -272,11 +275,46 @@ class _LoginScreenState extends State<LoginScreen> {
                   hintText: "Email or Username",
                 ),
                 const SizedBox(height: 16),
-                _buildInputField(
+                TextField(
                   controller: _passwordController,
-                  icon: Icons.lock,
-                  hintText: "Password",
-                  obscureText: true,
+                  obscureText: _isPasswordObscured,
+                  style: const TextStyle(color: Colors.black87),
+                  decoration: InputDecoration(
+                    prefixIcon: Icon(Icons.lock, color: _primaryColor),
+                    hintText: "Password",
+                    hintStyle: TextStyle(color: Colors.grey[500]),
+                    filled: true,
+                    fillColor: Colors.grey[50],
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Colors.grey[200]!),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: _primaryColor, width: 1.5),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      vertical: 16,
+                      horizontal: 16,
+                    ),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _isPasswordObscured
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                        color: _primaryColor,
+                      ),
+                      tooltip:
+                          _isPasswordObscured
+                              ? 'Show password'
+                              : 'Hide password',
+                      onPressed: () {
+                        setState(() {
+                          _isPasswordObscured = !_isPasswordObscured;
+                        });
+                      },
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 24),
                 _buildGradientLoginButton(),

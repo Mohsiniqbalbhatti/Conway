@@ -21,11 +21,7 @@ class DBHelper {
   Future<Database> _initDB() async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, _dbName);
-    return await openDatabase(
-      path,
-      version: 1,
-      onCreate: _onCreate,
-    );
+    return await openDatabase(path, version: 1, onCreate: _onCreate);
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -33,6 +29,7 @@ class DBHelper {
       CREATE TABLE $_userTable(
         user_id TEXT PRIMARY KEY, 
         email TEXT UNIQUE,
+        fullname TEXT,
         profileUrl TEXT
       )
       ''');
@@ -46,13 +43,18 @@ class DBHelper {
       user.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace, // Replace if user_id exists
     );
-    print("User inserted/updated in local DB: ${user.id}");
+    print(
+      "[DBHelper insertUser] User inserted/replaced: ${user.email}, Fullname: ${user.fullname}",
+    );
   }
 
   // Get the current user (should only be one)
   Future<conway_user.User?> getUser() async {
     final db = await database;
-    final List<Map<String, dynamic>> maps = await db.query(_userTable, limit: 1);
+    final List<Map<String, dynamic>> maps = await db.query(
+      _userTable,
+      limit: 1,
+    );
 
     if (maps.isNotEmpty) {
       print("User retrieved from local DB: ${maps.first['user_id']}");
@@ -61,6 +63,37 @@ class DBHelper {
       print("No user found in local DB.");
       return null;
     }
+  }
+
+  // Update specific user details (like email, name, profileUrl)
+  Future<int> updateUserDetails(
+    String userId, {
+    String? email,
+    String? fullname,
+    String? profileUrl,
+  }) async {
+    final db = await database;
+    Map<String, dynamic> dataToUpdate = {};
+    if (email != null) dataToUpdate['email'] = email;
+    if (fullname != null) dataToUpdate['fullname'] = fullname;
+    if (profileUrl != null) dataToUpdate['profileUrl'] = profileUrl;
+
+    if (dataToUpdate.isEmpty) {
+      print(
+        "[DBHelper updateUserDetails] No details provided to update for userId: $userId",
+      );
+      return 0; // No changes made
+    }
+
+    print(
+      "[DBHelper updateUserDetails] Updating userId: $userId with data: $dataToUpdate",
+    );
+    return await db.update(
+      _userTable,
+      dataToUpdate,
+      where: 'user_id = ?',
+      whereArgs: [userId],
+    );
   }
 
   // Clear user data (for logout)

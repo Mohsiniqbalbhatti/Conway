@@ -104,18 +104,33 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (!mounted) return;
     setState(() => _isFetchingDetails = true);
     try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/groups/${widget.groupId}/details'),
-        headers: {'Content-Type': 'application/json'},
+      // Add this debug print:
+      debugPrint(
+        "[GroupChatScreen FetchDetails] Attempting to fetch details for groupId: ${widget.groupId}",
       );
+
+      final response = await http
+          .get(
+            Uri.parse(
+              '${ApiConfig.baseUrl}/api/groups/${widget.groupId}/details',
+            ),
+            headers: {'Content-Type': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 15));
+
       if (mounted && response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        // Add this debug print to see the raw data:
+        debugPrint(
+          "[GroupChatScreen FetchDetails] Received data from API: $data",
+        );
+
         setState(() {
           _creatorId = data['creatorId'] as String?;
           _isAdmin = (_currentUser != null && _currentUser!.id == _creatorId);
           _isFetchingDetails = false;
           debugPrint(
-            "[GroupChatScreen] Fetched Group Details. Admin: $_isAdmin (Creator: $_creatorId, Current: ${_currentUser?.id})",
+            "[GroupChatScreen FetchDetails] Parsed Details. Admin: $_isAdmin (Creator: $_creatorId, Current: ${_currentUser?.id})",
           );
         });
       } else if (mounted) {
@@ -235,7 +250,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         _sortMessages(); // Ensure messages are sorted by time
       });
       // Scroll only if the user is near the bottom
-      // TODO: Add logic to check scroll position before auto-scrolling
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
   }
@@ -394,7 +408,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           .get(
             // Add userId query parameter to the request URL
             Uri.parse(
-              '${ApiConfig.baseUrl}/group-messages/${widget.groupId}?userId=${_currentUser!.id}',
+              '${ApiConfig.baseUrl}/api/group-messages/${widget.groupId}?userId=${_currentUser!.id}',
             ),
             headers: {'Content-Type': 'application/json'},
           )
@@ -730,7 +744,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 color: Colors.white,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.grey.withOpacity(0.2),
+                    color: Colors.grey.withAlpha(51),
                     spreadRadius: 1,
                     blurRadius: 5,
                     offset: const Offset(0, -1),
@@ -915,7 +929,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
+            color: Colors.grey.withAlpha(26),
             spreadRadius: 1,
             blurRadius: 1,
             offset: const Offset(0, 1),
@@ -989,6 +1003,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     return GestureDetector(
       onLongPress: () {
+        // Add this debug print:
+        debugPrint(
+          "[GroupChatScreen LongPress] Checking admin status: _isAdmin = $_isAdmin (Current User ID: ${_currentUser?.id}, Creator ID: $_creatorId)",
+        );
+
         if (_isAdmin && !isOptimistic && !failedToSend) {
           // Only allow admin to delete confirmed messages
           _showMessageAdminOptions(messageId);
@@ -1055,8 +1074,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   // Builds the placeholder for a deleted message
   Widget _buildDeletedMessagePlaceholder(Map<String, dynamic> messageData) {
-    // final bool isMe = messageData['isMe'] ?? false; // We don't need original sender here
-    final String time = _formatTime(messageData['time']); // Still show time
+    final String time = _formatTime(messageData['time']);
 
     // Determine text based on whether the CURRENT USER is the admin
     final String deletedText =
@@ -1197,7 +1215,6 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   void _showMessageDetailsDialog(Map<String, dynamic> messageData) {
     final bool isMe = messageData['isMe'] ?? false;
     final bool isBurnout = messageData['isBurnout'] ?? false;
-    final String? expireAtStr = messageData['expireAt'];
     final bool isScheduled = messageData['isScheduled'] ?? false;
     final String? scheduledAtStr = messageData['scheduledAt'];
     final bool actuallyExpired = messageData['actuallyExpired'] ?? false;
@@ -1206,7 +1223,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         messageData['deleted_at'] != null; // Check if deleted
 
     DateTime? expireAt =
-        expireAtStr != null ? DateTime.tryParse(expireAtStr)?.toLocal() : null;
+        messageData['expireAt'] != null
+            ? DateTime.tryParse(messageData['expireAt'])?.toLocal()
+            : null;
     DateTime? scheduledAt =
         scheduledAtStr != null
             ? DateTime.tryParse(scheduledAtStr)?.toLocal()
@@ -1361,39 +1380,32 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
     );
 
-    if (pickedDate != null && mounted) {
-      final TimeOfDay? pickedTime = await showTimePicker(
-        context: context,
-        initialTime: TimeOfDay.fromDateTime(initialDateTime),
+    if (!mounted || pickedDate == null) return null;
+
+    final TimeOfDay? pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initialDateTime),
+    );
+
+    if (!mounted || pickedTime == null) return null;
+
+    final selectedDateTime = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime.hour,
+      pickedTime.minute,
+    );
+
+    if (selectedDateTime.isAfter(DateTime.now())) {
+      return selectedDateTime;
+    } else {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selected time must be in the future.')),
       );
-
-      if (pickedTime != null && mounted) {
-        final selectedDateTime = DateTime(
-          pickedDate.year,
-          pickedDate.month,
-          pickedDate.day,
-          pickedTime.hour,
-          pickedTime.minute,
-        );
-
-        if (selectedDateTime.isAfter(
-          DateTime.now().subtract(const Duration(minutes: 1)),
-        )) {
-          return selectedDateTime;
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Selected time must be in the future.'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-          return null;
-        }
-      }
+      return null;
     }
-    return null;
   }
 
   void _handleScheduleTap() async {

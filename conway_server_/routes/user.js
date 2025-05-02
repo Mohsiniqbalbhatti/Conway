@@ -3,6 +3,22 @@ const router = express.Router();
 const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
 const User = require("../models/User");
+const bcrypt = require("bcrypt"); // Needed for password check
+
+// --- Assume helper functions exist ---
+// const { generateOtp } = require('../utils/otpHelper'); // Or your OTP logic location
+// const { sendEmail } = require('../utils/emailHelper'); // Or your email logic location
+// Mock functions if helpers don't exist yet:
+const generateOtp = () =>
+  Math.floor(100000 + Math.random() * 900000).toString();
+const sendEmail = async (to, subject, text) => {
+  console.log(
+    `---- MOCK EMAIL ----\nTo: ${to}\nSubject: ${subject}\nBody: ${text}\n--------------------`
+  );
+  // In real app, integrate with SendGrid, Nodemailer, etc.
+  return Promise.resolve();
+};
+// --- End Assume helper functions ---
 
 // --- Multer Setup for Memory Storage ---
 // We'll store the file in memory buffer temporarily before uploading to Cloudinary
@@ -135,5 +151,269 @@ router.post(
     }
   }
 );
+
+// --- Route to Initiate Profile Update (Name and/or Email) ---
+router.put("/profile", async (req, res) => {
+  const { userId, currentPassword, fullname, newEmail } = req.body;
+
+  console.log(`[PUT /user/profile] Update request for userId: ${userId}`);
+
+  if (!userId || !currentPassword) {
+    return res
+      .status(400)
+      .json({ error: "User ID and current password are required." });
+  }
+  if (!fullname && !newEmail) {
+    return res
+      .status(400)
+      .json({ error: "No changes provided (fullname or newEmail required)." });
+  }
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    // 1. Verify Current Password
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      console.warn(
+        `[PUT /user/profile] Invalid password attempt for userId: ${userId}`
+      );
+      return res.status(401).json({ error: "Invalid current password." });
+    }
+
+    let nameChanged = false;
+    let emailChangeInitiated = false;
+
+    // 2. Update Fullname if provided and different
+    if (fullname && fullname.trim() !== user.fullname) {
+      user.fullname = fullname.trim();
+      nameChanged = true;
+      console.log(
+        `[PUT /user/profile] Updating fullname for userId: ${userId}`
+      );
+    }
+
+    // 3. Handle Email Change Request if provided and different
+    if (newEmail && newEmail.trim().toLowerCase() !== user.email) {
+      const cleanNewEmail = newEmail.trim().toLowerCase();
+
+      // Check if the new email is already taken by another verified user
+      const existingUser = await User.findOne({
+        email: cleanNewEmail,
+        _id: { $ne: user._id },
+        isVerified: true,
+      });
+      if (existingUser) {
+        console.warn(
+          `[PUT /user/profile] New email ${cleanNewEmail} already in use by userId: ${existingUser._id}`
+        );
+        return res
+          .status(409)
+          .json({ error: "New email address is already registered." });
+      }
+
+      // Generate and store OTP for email change
+      const otp = generateOtp();
+      const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
+
+      user.pendingEmail = cleanNewEmail;
+      user.emailChangeOtp = otp;
+      user.emailChangeOtpExpires = otpExpiry;
+      emailChangeInitiated = true;
+
+      console.log(
+        `[PUT /user/profile] Initiating email change for userId: ${userId} to ${cleanNewEmail}. OTP: ${otp}`
+      );
+
+      // Send OTP to the *new* email address
+      await sendEmail(
+        cleanNewEmail,
+        "Verify Your New Email Address",
+        `Your OTP to verify your new email address is: ${otp}\nThis code will expire in 10 minutes.`
+      ).catch((err) => {
+        console.error(
+          `[PUT /user/profile] Failed to send OTP email to ${cleanNewEmail}:`,
+          err
+        );
+        // Don't block the process, but log the error. User might still check console if mock.
+      });
+    }
+
+    // 4. Save Changes (including potential OTP info and name change)
+    if (nameChanged || emailChangeInitiated) {
+      user.updatedAt = Date.now();
+      await user.save();
+    }
+
+    // 5. Send Response
+    res.status(200).json({
+      success: true,
+      message: emailChangeInitiated
+        ? "Profile updated. OTP sent to new email for verification."
+        : "Profile updated successfully.",
+      otpRequired: emailChangeInitiated, // Signal to frontend if OTP step is next
+      // Optionally return updated user data (excluding sensitive fields)
+      user: {
+        fullname: user.fullname,
+        email: user.email, // Return current email, not pending one yet
+        profileUrl: user.profileUrl,
+      },
+    });
+  } catch (err) {
+    console.error(
+      `[PUT /user/profile] Error updating profile for userId ${userId}:`,
+      err
+    );
+    res
+      .status(500)
+      .json({ error: "Server error updating profile.", details: err.message });
+  }
+});
+
+// --- Route to Verify Email Change OTP and Finalize ---
+router.post("/verify-email-change", async (req, res) => {
+  const { userId, otp } = req.body;
+
+  console.log(
+    `[POST /user/verify-email-change] Verification attempt for userId: ${userId}`
+  );
+
+  if (!userId || !otp) {
+    return res.status(400).json({ error: "User ID and OTP are required." });
+  }
+
+  try {
+    const user = await User.findById(userId);
+
+    // Basic checks
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (
+      !user.pendingEmail ||
+      !user.emailChangeOtp ||
+      !user.emailChangeOtpExpires
+    ) {
+      return res
+        .status(400)
+        .json({ error: "No pending email change found for this user." });
+    }
+
+    // Check OTP expiry
+    if (new Date() > user.emailChangeOtpExpires) {
+      console.warn(
+        `[POST /user/verify-email-change] Expired OTP attempt for userId: ${userId}`
+      );
+      // Clear expired OTP details
+      user.pendingEmail = undefined;
+      user.emailChangeOtp = undefined;
+      user.emailChangeOtpExpires = undefined;
+      await user.save();
+      return res
+        .status(410)
+        .json({ error: "OTP has expired. Please try again." }); // 410 Gone
+    }
+
+    // Check OTP value
+    if (otp !== user.emailChangeOtp) {
+      console.warn(
+        `[POST /user/verify-email-change] Invalid OTP attempt for userId: ${userId}`
+      );
+      return res.status(400).json({ error: "Invalid OTP." });
+    }
+
+    // --- Success ---
+    console.log(
+      `[POST /user/verify-email-change] OTP verified for userId: ${userId}. Updating email to ${user.pendingEmail}`
+    );
+    user.email = user.pendingEmail;
+    user.pendingEmail = undefined;
+    user.emailChangeOtp = undefined;
+    user.emailChangeOtpExpires = undefined;
+    user.updatedAt = Date.now();
+    await user.save();
+
+    res
+      .status(200)
+      .json({ success: true, message: "Email address updated successfully." });
+  } catch (error) {
+    console.error(
+      "[POST /user/verify-email-change] Server error:",
+      error.message
+    );
+    res
+      .status(500)
+      .json({
+        error: "Server error verifying email change.",
+        details: error.message,
+      });
+  }
+});
+
+// --- Route to Change Password ---
+router.put("/change-password", async (req, res) => {
+  const { userId, currentPassword, newPassword } = req.body;
+
+  console.log(`[PUT /user/change-password] Request for userId: ${userId}`);
+
+  // Basic validation
+  if (!userId || !currentPassword || !newPassword) {
+    return res.status(400).json({
+      success: false,
+      error: "User ID, current password, and new password are required.",
+    });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({
+      success: false,
+      error: "New password must be at least 8 characters long.",
+    });
+  }
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) {
+      console.warn(`[PUT /user/change-password] User not found: ${userId}`);
+      return res.status(404).json({ success: false, error: "User not found." });
+    }
+
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      console.warn(
+        `[PUT /user/change-password] Invalid current password for userId: ${userId}`
+      );
+      return res
+        .status(401)
+        .json({ success: false, error: "Incorrect current password." });
+    }
+
+    // Hash the new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    // Update password in database
+    user.password = hashedPassword;
+    user.updatedAt = Date.now();
+    await user.save();
+
+    console.log(
+      `[PUT /user/change-password] Password updated for userId: ${userId}`
+    );
+    res
+      .status(200)
+      .json({ success: true, message: "Password updated successfully." });
+  } catch (error) {
+    console.error("[PUT /user/change-password] Server error:", error.message);
+    res.status(500).json({
+      success: false,
+      error: "Server error changing password.",
+      details: error.message,
+    });
+  }
+});
 
 module.exports = router;

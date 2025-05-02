@@ -8,7 +8,6 @@ import '../../services/socket_service.dart';
 import '../../constants/api_config.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'user_profile_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String userName;
@@ -231,7 +230,7 @@ class ChatScreenState extends State<ChatScreen> {
     try {
       final response = await http
           .post(
-            Uri.parse('${ApiConfig.baseUrl}/get-messages'),
+            Uri.parse('${ApiConfig.baseUrl}/api/get-messages'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'senderEmail': _currentUser!.email,
@@ -467,17 +466,7 @@ class ChatScreenState extends State<ChatScreen> {
         ),
         title: GestureDetector(
           onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder:
-                    (context) => UserProfileScreen(
-                      userName: widget.userName,
-                      userEmail: widget.userEmail,
-                      profileUrl: widget.profileUrl,
-                    ),
-              ),
-            );
+            // Implement user profile tap functionality
           },
           child: Row(
             children: [
@@ -846,13 +835,14 @@ class ChatScreenState extends State<ChatScreen> {
   void _showMessageDetailsDialog(Map<String, dynamic> messageData) {
     final bool isMe = messageData['isMe'] ?? false;
     final bool isBurnout = messageData['isBurnout'] ?? false;
-    final String? expireAtStr = messageData['expireAt'];
     final bool isScheduled = messageData['isScheduled'] ?? false;
     final String? scheduledAtStr = messageData['scheduledAt'];
     final bool actuallyExpired = messageData['actuallyExpired'] ?? false;
 
     DateTime? expireAt =
-        expireAtStr != null ? DateTime.tryParse(expireAtStr)?.toLocal() : null;
+        messageData['expireAt'] != null
+            ? DateTime.tryParse(messageData['expireAt'])?.toLocal()
+            : null;
     DateTime? scheduledAt =
         scheduledAtStr != null
             ? DateTime.tryParse(scheduledAtStr)?.toLocal()
@@ -959,36 +949,32 @@ class ChatScreenState extends State<ChatScreen> {
       lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
     );
 
-    if (pickedDate != null && mounted) {
-      final TimeOfDay? pickedTime = await showTimePicker(
-        context: context,
-        initialTime: TimeOfDay.fromDateTime(initialDateTime),
+    if (!mounted || pickedDate == null) return null;
+
+    final TimeOfDay? pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initialDateTime),
+    );
+
+    if (!mounted || pickedTime == null) return null;
+
+    final selectedDateTime = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime.hour,
+      pickedTime.minute,
+    );
+
+    if (selectedDateTime.isAfter(DateTime.now())) {
+      return selectedDateTime;
+    } else {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selected time must be in the future.')),
       );
-
-      if (pickedTime != null && mounted) {
-        final selectedDateTime = DateTime(
-          pickedDate.year,
-          pickedDate.month,
-          pickedDate.day,
-          pickedTime.hour,
-          pickedTime.minute,
-        );
-
-        if (selectedDateTime.isAfter(DateTime.now())) {
-          return selectedDateTime;
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Selected time must be in the future.'),
-              ),
-            );
-          }
-          return null;
-        }
-      }
+      return null;
     }
-    return null;
   }
 
   void _handleScheduleTap() async {
