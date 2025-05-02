@@ -10,7 +10,6 @@ class CryptoHelper {
   // IV is handled per message (extracted from received, generated for sending)
   // static final encrypt.IV _iv = encrypt.IV.fromLength(16); // Not used directly like this
 
-  static final encrypt.Encrypter _encrypter = encrypt.Encrypter(encrypt.AES(_key, mode: encrypt.AESMode.cbc));
 
   static String encryptText(String plainText) {
     // DISABLED: Return plain text

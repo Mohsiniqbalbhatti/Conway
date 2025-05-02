@@ -36,13 +36,17 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   List<Map<String, dynamic>> _messages = []; // Use this for real messages
   bool _isLoading = true; // Start as loading
+  bool _isFetchingDetails = true; // Separate loading state for group details
   User? _currentUser;
+  String? _creatorId; // To store the group creator's ID
+  bool _isAdmin = false; // Flag for admin status
 
   // Socket Service and Subscriptions
   final SocketService _socketService = SocketService();
   StreamSubscription? _groupMessageSubscription;
   StreamSubscription? _groupMessageSentSubscription;
   StreamSubscription? _groupMessageExpiredSubscription; // NEW: For expiry
+  StreamSubscription? _groupMessageDeletedSubscription; // NEW: For deletion
 
   // NEW: State for Burnout/Schedule
   DateTime? _scheduledTime;
@@ -67,24 +71,67 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   @override
   void initState() {
     super.initState();
-    _loadUserDataAndMessages();
-    // Connect socket after user data is loaded (or in _loadUserDataAndMessages)
+    _loadInitialData(); // Combine initial loading steps
   }
 
-  Future<void> _loadUserDataAndMessages() async {
+  Future<void> _loadInitialData() async {
     await _loadUserData();
     if (_currentUser != null) {
-      // Connect socket here after confirming user ID
+      // Connect socket first
       _socketService.connect(_currentUser!.id.toString());
       _setupSocketListeners();
-      await _fetchGroupMessages(); // Fetch initial messages
+
+      // Fetch group details and messages concurrently
+      await Future.wait([
+        _fetchGroupDetails(), // Fetch details to determine admin status
+        _fetchGroupMessages(scrollToBottom: true), // Fetch initial messages
+      ]);
     } else {
       // Handle error: user data not found
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Error: Could not load user data.')),
         );
-        setState(() => _isLoading = false);
+        setState(() {
+          _isLoading = false;
+          _isFetchingDetails = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _fetchGroupDetails() async {
+    if (!mounted) return;
+    setState(() => _isFetchingDetails = true);
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/groups/${widget.groupId}/details'),
+        headers: {'Content-Type': 'application/json'},
+      );
+      if (mounted && response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          _creatorId = data['creatorId'] as String?;
+          _isAdmin = (_currentUser != null && _currentUser!.id == _creatorId);
+          _isFetchingDetails = false;
+          debugPrint(
+            "[GroupChatScreen] Fetched Group Details. Admin: $_isAdmin (Creator: $_creatorId, Current: ${_currentUser?.id})",
+          );
+        });
+      } else if (mounted) {
+        debugPrint(
+          "[GroupChatScreen] Error fetching group details: ${response.statusCode}",
+        );
+        setState(() => _isFetchingDetails = false);
+        // Optionally show error
+      }
+    } catch (e) {
+      if (mounted) {
+        debugPrint(
+          "[GroupChatScreen] Network error fetching group details: $e",
+        );
+        setState(() => _isFetchingDetails = false);
+        // Optionally show error
       }
     }
   }
@@ -117,6 +164,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           );
           _handleGroupMessageExpiry(expiryData);
         });
+
+    // NEW: Deletion Listener
+    _groupMessageDeletedSubscription = _socketService.onGroupMessageDeleted
+        .listen((deletedData) {
+          debugPrint(
+            "[GroupChatScreen DELETE EVENT] Received deletion event: $deletedData",
+          );
+          _handleGroupMessageDeleted(deletedData);
+        });
   }
 
   void _handleReceivedGroupMessage(Map<String, dynamic> messageData) {
@@ -145,12 +201,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     DateTime? expireAt =
         expireAtStr != null ? DateTime.tryParse(expireAtStr)?.toLocal() : null;
 
-    // Ignore expired burnout messages on arrival
-    if (isBurnout && expireAt != null && expireAt.isBefore(DateTime.now())) {
+    // Check if message is already deleted or expired on arrival
+    final bool isDeleted = messageData['deleted_at'] != null;
+    final bool isExpired =
+        isBurnout && expireAt != null && expireAt.isBefore(DateTime.now());
+
+    if (isDeleted || isExpired) {
       debugPrint(
-        "[GroupChatScreen RECEIVE] Burnout message $messageId already expired. Ignoring.",
+        "[GroupChatScreen RECEIVE] Message $messageId arrived deleted or expired. Ignoring display.",
       );
-      return;
+      return; // Don't add if already deleted/expired
     }
 
     // Construct the message object for UI
@@ -166,6 +226,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       'expireAt': expireAtStr,
       'isScheduled': isScheduled,
       'scheduledAt': scheduledAtStr,
+      'deleted_at': null, // Assume not deleted initially
     };
 
     if (mounted) {
@@ -210,6 +271,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           _messages[index]['scheduledAt'] = sentData['scheduledAt'];
           _messages[index]['isBurnout'] = sentData['isBurnout'] ?? false;
           _messages[index]['expireAt'] = sentData['expireAt'];
+          _messages[index]['deleted_at'] =
+              null; // Ensure deleted_at is null on confirmation
           _sortMessages();
         } else {
           debugPrint(
@@ -255,9 +318,55 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
+  // --- NEW: Deletion Handler ---
+  void _handleGroupMessageDeleted(Map<String, dynamic> deletedData) {
+    final messageId = deletedData['messageId'] as String?;
+    final receivedGroupId = deletedData['groupId'] as String?;
+
+    debugPrint(
+      "[GroupChatScreen DELETE EVENT] Received deletion event for message: $messageId in group: $receivedGroupId",
+    );
+
+    if (messageId == null || receivedGroupId != widget.groupId) {
+      debugPrint(
+        "[GroupChatScreen DELETE EVENT] Ignoring event (missing data or wrong group).",
+      );
+      return;
+    }
+
+    if (mounted) {
+      // Find the index first
+      final index = _messages.indexWhere((msg) => msg['id'] == messageId);
+
+      if (index != -1) {
+        debugPrint(
+          "[GroupChatScreen DELETE EVENT] Marking message $messageId as deleted in UI.",
+        );
+
+        // Create a new list with the updated message map
+        final updatedMessages = List<Map<String, dynamic>>.from(_messages);
+        // Create a new map for the specific message, copying existing and adding deleted_at
+        updatedMessages[index] = {
+          ...updatedMessages[index], // Spread existing key-value pairs
+          'deleted_at':
+              DateTime.now().toUtc().toIso8601String(), // Add/update deleted_at
+        };
+
+        // Update the state with the new list
+        setState(() {
+          _messages = updatedMessages;
+        });
+      } else {
+        debugPrint(
+          "[GroupChatScreen DELETE EVENT] Message $messageId not found in local list.",
+        );
+      }
+    }
+  }
+
   Future<void> _loadUserData() async {
     final user = await DBHelper().getUser();
-    // No setState here, it will be called in _loadUserDataAndMessages
+    // No setState here, it will be called in _loadInitialData
     _currentUser = user;
   }
 
@@ -302,6 +411,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           setState(() {
             _messages =
                 fetchedMessages
+                    .where(
+                      (msg) => msg['deleted_at'] == null,
+                    ) // Filter out already deleted messages
                     .map((msg) {
                       return {
                         'id': msg['id'],
@@ -317,8 +429,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         'expireAt': msg['expireAt'],
                         'isScheduled': msg['isScheduled'] ?? false,
                         'scheduledAt': msg['scheduledAt'],
-                        // Mark already expired sent messages
-                        'actuallyExpired': msg['actuallyExpired'] ?? false,
+                        'deleted_at':
+                            msg['deleted_at'], // Store deleted_at status
                       };
                     })
                     .cast<Map<String, dynamic>>() // Cast is enough now
@@ -365,7 +477,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     // Cancel subscriptions
     _groupMessageSubscription?.cancel();
     _groupMessageSentSubscription?.cancel();
-    _groupMessageExpiredSubscription?.cancel(); // NEW
+    _groupMessageExpiredSubscription?.cancel();
+    _groupMessageDeletedSubscription?.cancel(); // NEW
     // Consider disconnecting socket if appropriate for app lifecycle
     // _socketService.disconnect();
     super.dispose();
@@ -400,6 +513,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       'expireAt': burnTime?.toUtc().toIso8601String(),
       'isScheduled': scheduleTime != null,
       'scheduledAt': scheduleTime?.toUtc().toIso8601String(),
+      'deleted_at': null, // Optimistic messages are never deleted initially
     };
 
     setState(() {
@@ -449,6 +563,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Use a loading flag that combines message loading and detail fetching
+    final bool isOverallLoading = _isLoading || _isFetchingDetails;
+
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: Container(
@@ -478,7 +595,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         currentUserId: _currentUser!.id, // Pass current user ID
                       ),
                 ),
-              );
+              ).then((_) {
+                // Optional: Refresh details if settings were changed
+                // _fetchGroupDetails();
+              });
             } else {
               // Handle case where user data isn't loaded yet
               ScaffoldMessenger.of(context).showSnackBar(
@@ -537,7 +657,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             // Chat messages
             Expanded(
               child:
-                  _isLoading
+                  isOverallLoading
                       ? Center(
                         child: CircularProgressIndicator(color: _primaryColor),
                       )
@@ -585,6 +705,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                           if (message['visuallyExpired'] == true) {
                             return const SizedBox.shrink(); // Hide if expired for receiver
                           }
+                          final isDeleted =
+                              message['deleted_at'] != null; // Check if deleted
                           final isMe =
                               message['isMe'] ?? false; // Get isMe flag
 
@@ -592,33 +714,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                           final senderName = message['senderName'] ?? 'Unknown';
 
                           // Pass necessary data to _buildMessageBubble
-                          return _buildMessageBubble(
-                            sender: senderName,
-                            message: message['text'] ?? '',
-                            time: _formatTime(message['time']), // Format time
-                            isMe: isMe,
-                            senderColor:
-                                isMe
-                                    ? null
-                                    : _getUserColor(
-                                      senderName.hashCode,
-                                    ), // Assign color based on sender hash
-                            showSender:
-                                !isMe &&
-                                _shouldShowSender(index), // Show sender logic
-                            isOptimistic:
-                                message['isOptimistic'] ??
-                                false, // Pass optimistic flag
-                            failedToSend:
-                                message['failedToSend'] ??
-                                false, // Pass failed flag
-                            isBurnout: message['isBurnout'] ?? false,
-                            expireAtStr: message['expireAt'],
-                            isScheduled: message['isScheduled'] ?? false,
-                            scheduledAtStr: message['scheduledAt'],
-                            actuallyExpired:
-                                message['actuallyExpired'] ?? false,
-                          );
+                          return isDeleted
+                              ? _buildDeletedMessagePlaceholder(message)
+                              : _buildMessageBubble(
+                                messageData: message,
+                                showSender: _shouldShowSender(index),
+                              );
                         },
                       ),
             ),
@@ -767,53 +868,144 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   // Updated _buildMessageBubble to use real data and add optimistic/failed indicators
   Widget _buildMessageBubble({
-    required String sender,
-    required String message,
-    required String time,
-    required bool isMe,
-    Color? senderColor,
+    required Map<String, dynamic> messageData,
     required bool showSender,
-    required bool isOptimistic,
-    required bool failedToSend,
-    required bool isBurnout,
-    String? expireAtStr,
-    required bool isScheduled,
-    String? scheduledAtStr,
-    required bool actuallyExpired,
   }) {
+    final String sender = messageData['senderName'] ?? 'Unknown';
+    final String message = messageData['text'] ?? '';
+    final String time = _formatTime(messageData['time']);
+    final bool isMe = messageData['isMe'] ?? false;
+    final Color? senderColor = isMe ? null : _getUserColor(sender.hashCode);
+    final bool isOptimistic = messageData['isOptimistic'] ?? false;
+    final bool failedToSend = messageData['failedToSend'] ?? false;
+    final bool isBurnout = messageData['isBurnout'] ?? false;
+    final String? expireAtStr = messageData['expireAt'];
+    final bool isScheduled = messageData['isScheduled'] ?? false;
+    final String? scheduledAtStr = messageData['scheduledAt'];
+    final bool actuallyExpired = messageData['actuallyExpired'] ?? false;
+    final String messageId = messageData['id']; // Get message ID
+
+    // Don't render if visually expired for receiver
+    if (!isMe && (messageData['visuallyExpired'] == true)) {
+      return const SizedBox.shrink();
+    }
+
     final Color messageColor = isMe ? _primaryColor : Colors.white;
     final Color textColor = isMe ? Colors.white : Colors.black87;
 
-    // NEW: Check if message is pending schedule (only relevant if it's mine)
     final bool isPendingSchedule =
         isMe &&
         isScheduled &&
         scheduledAtStr != null &&
         (DateTime.tryParse(scheduledAtStr)?.isAfter(DateTime.now()) ?? false);
 
+    // Main bubble content
+    Widget bubbleContent = Container(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.7,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+      decoration: BoxDecoration(
+        color: messageColor,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(18),
+          topRight: const Radius.circular(18),
+          bottomLeft: isMe ? const Radius.circular(18) : Radius.zero,
+          bottomRight: isMe ? Radius.zero : const Radius.circular(18),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 1,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          Text(message, style: TextStyle(color: textColor, fontSize: 16)),
+          const SizedBox(height: 2),
+          Row(
+            // Time and status icons
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Schedule/Burnout Icons (existing logic)
+              if (isPendingSchedule)
+                Icon(
+                  Icons.alarm,
+                  size: 14,
+                  color: isMe ? Colors.white70 : Colors.blue[700],
+                ),
+              if (isPendingSchedule) const SizedBox(width: 4),
+              if (isBurnout)
+                Icon(
+                  Icons.local_fire_department,
+                  size: 14,
+                  color:
+                      actuallyExpired
+                          ? (isMe ? Colors.white54 : Colors.grey[500])
+                          : (isMe ? Colors.white70 : Colors.orange[700]),
+                ),
+              if (isBurnout) const SizedBox(width: 4),
+              Text(
+                time,
+                style: TextStyle(
+                  color: isMe ? Colors.white70 : Colors.grey[600],
+                  fontSize: 12,
+                ),
+              ),
+              // Sent/Pending/Error Icons (existing logic)
+              if (isMe && !isOptimistic && !failedToSend)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4.0),
+                  child: Icon(Icons.done_all, color: Colors.white70, size: 16),
+                ),
+              if (isMe && isOptimistic)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4.0),
+                  child: Icon(
+                    Icons.access_time,
+                    color: Colors.white70,
+                    size: 16,
+                  ),
+                ),
+              if (isMe && failedToSend)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4.0),
+                  child: Icon(
+                    Icons.error_outline,
+                    color: Colors.red[200],
+                    size: 16,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+
     return GestureDetector(
-      // Wrap with GestureDetector for long-press
-      onLongPress:
-          () => _showMessageDetailsDialog({
-            // Pass all relevant data to dialog
-            'text': message, 'time': time, 'isMe': isMe,
-            'isBurnout': isBurnout, 'expireAt': expireAtStr,
-            'isScheduled': isScheduled, 'scheduledAt': scheduledAtStr,
-            'actuallyExpired': actuallyExpired,
-            'senderName': sender, // Pass sender name
-          }),
+      onLongPress: () {
+        if (_isAdmin && !isOptimistic && !failedToSend) {
+          // Only allow admin to delete confirmed messages
+          _showMessageAdminOptions(messageId);
+        } else {
+          // Optionally show standard info dialog for non-admins or pending messages
+          _showMessageDetailsDialog(messageData);
+        }
+      },
       child: Opacity(
-        // Wrap with Opacity for optimistic UI
         opacity: isOptimistic ? 0.7 : 1.0,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
           child: Column(
             crossAxisAlignment:
-                isMe
-                    ? CrossAxisAlignment.end
-                    : CrossAxisAlignment.start, // Align text based on sender
+                isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
-              // Show sender name if needed
+              // Show sender name (existing logic)
               if (showSender && !isMe)
                 Padding(
                   padding: const EdgeInsets.only(left: 48, bottom: 2),
@@ -826,31 +1018,23 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     ),
                   ),
                 ),
-
               Row(
                 mainAxisAlignment:
                     isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  if (!isMe) // Show avatar for others
+                  if (!isMe) // Avatar for others
                     Container(
                       width: 30,
                       height: 30,
                       margin: const EdgeInsets.only(right: 8, bottom: 5),
                       decoration: BoxDecoration(
-                        color:
-                            senderColor ??
-                            _getGroupColor(
-                              widget.groupIndex,
-                            ), // Use sender specific color
+                        color: senderColor ?? _getGroupColor(widget.groupIndex),
                         shape: BoxShape.circle,
                       ),
                       child: Center(
-                        // Center initial letter
                         child: Text(
-                          sender.isNotEmpty
-                              ? sender[0].toUpperCase()
-                              : '?', // Display first letter
+                          sender.isNotEmpty ? sender[0].toUpperCase() : '?',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 14,
@@ -859,129 +1043,282 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         ),
                       ),
                     ),
-                  Flexible(
-                    child: Container(
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.7,
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 15,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: messageColor,
-                        borderRadius: BorderRadius.only(
-                          topLeft: const Radius.circular(18),
-                          topRight: const Radius.circular(18),
-                          bottomLeft:
-                              isMe ? const Radius.circular(18) : Radius.zero,
-                          bottomRight:
-                              isMe ? Radius.zero : const Radius.circular(18),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.grey.withOpacity(0.1),
-                            spreadRadius: 1,
-                            blurRadius: 1,
-                            offset: const Offset(0, 1),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment:
-                            isMe
-                                ? CrossAxisAlignment.end
-                                : CrossAxisAlignment
-                                    .start, // Align text based on sender
-                        children: [
-                          Text(
-                            message,
-                            style: TextStyle(color: textColor, fontSize: 16),
-                          ),
-                          const SizedBox(height: 2),
-                          Row(
-                            // Put time and status icon in a row
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // NEW: Add icons for schedule/burnout
-                              if (isPendingSchedule)
-                                Icon(
-                                  Icons.alarm,
-                                  size: 14,
-                                  color:
-                                      isMe
-                                          ? Colors.white70
-                                          : Colors
-                                              .blue[700], // Consistent with ChatScreen
-                                ),
-                              if (isPendingSchedule) const SizedBox(width: 4),
-                              if (isBurnout)
-                                Icon(
-                                  Icons.local_fire_department,
-                                  size: 14,
-                                  color:
-                                      actuallyExpired
-                                          ? (isMe
-                                              ? Colors.white54
-                                              : Colors
-                                                  .grey[500]) // Dim if expired
-                                          : (isMe
-                                              ? Colors.white70
-                                              : Colors
-                                                  .orange[700]), // Bright if active
-                                ),
-                              if (isBurnout) const SizedBox(width: 4),
-                              // END NEW Icons
-                              Text(
-                                time,
-                                style: TextStyle(
-                                  color:
-                                      isMe ? Colors.white70 : Colors.grey[600],
-                                  fontSize: 12,
-                                ),
-                              ),
-                              if (isMe &&
-                                  !isOptimistic &&
-                                  !failedToSend) // Show sent icon only for confirmed own messages
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 4.0),
-                                  child: Icon(
-                                    Icons
-                                        .done_all, // Use done_all for sent confirmation
-                                    color: Colors.white70, // Match time color
-                                    size: 16,
-                                  ),
-                                ),
-                              if (isMe && isOptimistic) // Show pending icon
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 4.0),
-                                  child: Icon(
-                                    Icons.access_time,
-                                    color: Colors.white70,
-                                    size: 16,
-                                  ),
-                                ),
-                              if (isMe && failedToSend) // Show error icon
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 4.0),
-                                  child: Icon(
-                                    Icons.error_outline,
-                                    color: Colors.red[200],
-                                    size: 16,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                  Flexible(child: bubbleContent),
                 ],
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  // Builds the placeholder for a deleted message
+  Widget _buildDeletedMessagePlaceholder(Map<String, dynamic> messageData) {
+    // final bool isMe = messageData['isMe'] ?? false; // We don't need original sender here
+    final String time = _formatTime(messageData['time']); // Still show time
+
+    // Determine text based on whether the CURRENT USER is the admin
+    final String deletedText =
+        _isAdmin
+            ? "You deleted this message" // If I am admin, I must have deleted it
+            : "Message deleted by admin"; // If I am not admin, an admin deleted it
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        // Align based on original sender still? Or always left align deleted?
+        // Let's keep alignment based on original sender for consistency.
+        mainAxisAlignment:
+            (messageData['isMe'] ?? false)
+                ? MainAxisAlignment.end
+                : MainAxisAlignment.start,
+        children: [
+          Flexible(
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.7,
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.grey[200],
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: Colors.grey[300]!),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.delete_outline, size: 16, color: Colors.grey[600]),
+                  const SizedBox(width: 8),
+                  Text(
+                    deletedText, // Use the determined text
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontStyle: FontStyle.italic,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    time,
+                    style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- Dialogs ---
+
+  // NEW: Show options for admin on long press
+  void _showMessageAdminOptions(String messageId) {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                leading: Icon(Icons.delete_forever, color: Colors.red[700]),
+                title: Text(
+                  'Delete for Everyone',
+                  style: TextStyle(color: Colors.red[700]),
+                ),
+                onTap: () {
+                  Navigator.pop(context); // Close the bottom sheet
+                  _showDeleteConfirmationDialog(messageId); // Show confirmation
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('Message Info'),
+                onTap: () {
+                  Navigator.pop(context);
+                  // Find the message data to show details
+                  final messageData = _messages.firstWhere(
+                    (msg) => msg['id'] == messageId,
+                    orElse: () => {},
+                  );
+                  if (messageData.isNotEmpty) {
+                    _showMessageDetailsDialog(messageData);
+                  }
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.cancel),
+                title: const Text('Cancel'),
+                onTap: () {
+                  Navigator.pop(context);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // NEW: Confirmation dialog for deletion
+  void _showDeleteConfirmationDialog(String messageId) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text("Delete Message?"),
+          content: const Text(
+            "This message will be deleted for everyone in the group. This action cannot be undone.",
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text("Cancel"),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
+              child: const Text("Delete"),
+              onPressed: () {
+                Navigator.of(context).pop(); // Close the dialog
+                _deleteMessage(messageId); // Proceed with deletion
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Existing Message Details Dialog
+  void _showMessageDetailsDialog(Map<String, dynamic> messageData) {
+    final bool isMe = messageData['isMe'] ?? false;
+    final bool isBurnout = messageData['isBurnout'] ?? false;
+    final String? expireAtStr = messageData['expireAt'];
+    final bool isScheduled = messageData['isScheduled'] ?? false;
+    final String? scheduledAtStr = messageData['scheduledAt'];
+    final bool actuallyExpired = messageData['actuallyExpired'] ?? false;
+    final String senderName = messageData['senderName'] ?? 'Unknown Sender';
+    final bool isDeleted =
+        messageData['deleted_at'] != null; // Check if deleted
+
+    DateTime? expireAt =
+        expireAtStr != null ? DateTime.tryParse(expireAtStr)?.toLocal() : null;
+    DateTime? scheduledAt =
+        scheduledAtStr != null
+            ? DateTime.tryParse(scheduledAtStr)?.toLocal()
+            : null;
+
+    String title = "Message Info";
+    List<Widget> content = [];
+    final now = DateTime.now();
+
+    if (isDeleted) {
+      title = "Deleted Message";
+      content.add(
+        Text(
+          isMe
+              ? "You deleted this message."
+              : "This message was deleted by the admin.",
+        ),
+      );
+    } else {
+      // Original logic for non-deleted messages
+      content.add(
+        Text(
+          "Sender: $senderName",
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+      );
+      content.add(const SizedBox(height: 8));
+      if (isScheduled && isMe && scheduledAt != null) {
+        if (scheduledAt.isAfter(now)) {
+          title = "Scheduled Message";
+          content.add(const Text("You scheduled this message to send on:"));
+        } else {
+          title = "Sent Scheduled Message";
+          content.add(
+            const Text("This message was scheduled and sent around:"),
+          );
+        }
+      } else if (isBurnout) {
+        if (isMe) {
+          if (actuallyExpired && expireAt != null) {
+            title = "Expired Message";
+            content.add(
+              const Text("This message expired for other members on:"),
+            );
+          } else if (expireAt != null && expireAt.isAfter(now)) {
+            title = "Burnout Message";
+            content.add(
+              const Text("This message will expire for other members on:"),
+            );
+          } else {
+            title = "Message Status";
+            content.add(
+              const Text("Burnout status is unclear for this message."),
+            );
+          }
+        } else {
+          if (expireAt != null && expireAt.isAfter(now)) {
+            title = "Burnout Message";
+            content.add(const Text("This message will expire on:"));
+          } else {
+            title = "Expired Message";
+            content.add(const Text("This message has expired."));
+          }
+        }
+        if (expireAt != null && expireAt.isAfter(now)) {
+          content.add(const SizedBox(height: 8));
+          content.add(
+            Text("Expires: ${_formatDateTimeUserFriendly(expireAt)}"),
+          );
+        } else if (expireAt != null) {
+          content.add(const SizedBox(height: 8));
+          content.add(
+            Text(
+              "(Expired: ${_formatDateTimeUserFriendly(expireAt)})",
+              style: const TextStyle(color: Colors.grey),
+            ),
+          );
+        }
+      } else {
+        content.add(const Text("Standard group message."));
+        final String? timeStr = messageData['time'];
+        final DateTime? sentTime =
+            timeStr != null ? DateTime.tryParse(timeStr)?.toLocal() : null;
+        if (sentTime != null) {
+          content.add(const SizedBox(height: 8));
+          content.add(Text("Sent: ${_formatDateTimeUserFriendly(sentTime)}"));
+        }
+      }
+
+      if (scheduledAt != null) {
+        content.add(const SizedBox(height: 8));
+        content.add(
+          Text("Scheduled: ${_formatDateTimeUserFriendly(scheduledAt)}"),
+        );
+      }
+    }
+
+    if (content.isEmpty) content.add(const Text("No details available."));
+
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Text(title),
+            content: SingleChildScrollView(child: ListBody(children: content)),
+            actions: [
+              TextButton(
+                child: const Text("OK"),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
     );
   }
 
@@ -1113,119 +1450,95 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     return '$dayStr, ${DateFormat.jm().format(time)}';
   }
 
-  // Update Dialog to show message details (Adapted from ChatScreen)
-  void _showMessageDetailsDialog(Map<String, dynamic> messageData) {
-    final bool isMe = messageData['isMe'] ?? false;
-    final bool isBurnout = messageData['isBurnout'] ?? false;
-    final String? expireAtStr = messageData['expireAt'];
-    final bool isScheduled = messageData['isScheduled'] ?? false;
-    final String? scheduledAtStr = messageData['scheduledAt'];
-    final bool actuallyExpired = messageData['actuallyExpired'] ?? false;
-    final String senderName = messageData['senderName'] ?? 'Unknown Sender';
+  // --- NEW: Delete Message Logic ---
+  Future<void> _deleteMessage(String messageId) async {
+    if (!_isAdmin || _currentUser == null) {
+      debugPrint(
+        "[GroupChatScreen DELETE] Not admin or user not loaded. Cannot delete.",
+      );
+      return;
+    }
 
-    DateTime? expireAt =
-        expireAtStr != null ? DateTime.tryParse(expireAtStr)?.toLocal() : null;
-    DateTime? scheduledAt =
-        scheduledAtStr != null
-            ? DateTime.tryParse(scheduledAtStr)?.toLocal()
-            : null;
-
-    String title = "Message Info";
-    List<Widget> content = [];
-    final now = DateTime.now();
-
-    content.add(
-      Text(
-        "Sender: $senderName",
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      ),
+    debugPrint(
+      "[GroupChatScreen DELETE] Attempting to delete message $messageId",
     );
-    content.add(const SizedBox(height: 8));
 
-    if (isScheduled && isMe && scheduledAt != null) {
-      if (scheduledAt.isAfter(now)) {
-        title = "Scheduled Message";
-        content.add(const Text("You scheduled this message to send on:"));
-      } else {
-        title = "Sent Scheduled Message";
-        content.add(const Text("This message was scheduled and sent around:"));
-      }
-      // No need to add separate timing info below if scheduled time is primary info
-    } else if (isBurnout) {
-      if (isMe) {
-        if (actuallyExpired && expireAt != null) {
-          title = "Expired Message";
-          content.add(const Text("This message expired for other members on:"));
-        } else if (expireAt != null && expireAt.isAfter(now)) {
-          title = "Burnout Message";
-          content.add(
-            const Text("This message will expire for other members on:"),
+    // Optional: Show a temporary loading indicator on the message itself?
+
+    try {
+      final response = await http
+          .delete(
+            Uri.parse('${ApiConfig.baseUrl}/messages/$messageId'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'userId':
+                  _currentUser!.id, // Send current user ID for backend auth
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        debugPrint(
+          "[GroupChatScreen DELETE] API call successful for message $messageId.",
+        );
+        // --- IMPORTANT: Update UI immediately for the admin ---
+        // Find the index of the message
+        final index = _messages.indexWhere((msg) => msg['id'] == messageId);
+        if (index != -1) {
+          // Create a new list with the updated message state
+          final updatedMessages = List<Map<String, dynamic>>.from(_messages);
+          updatedMessages[index] = {
+            ...updatedMessages[index],
+            'deleted_at':
+                DateTime.now()
+                    .toUtc()
+                    .toIso8601String(), // Mark as deleted locally
+          };
+          // Update state immediately
+          setState(() {
+            _messages = updatedMessages;
+          });
+          debugPrint(
+            "[GroupChatScreen DELETE] Updated local UI for deleted message $messageId.",
           );
         } else {
-          title = "Message Status";
-          content.add(
-            const Text("Burnout status is unclear for this message."),
+          debugPrint(
+            "[GroupChatScreen DELETE] Message $messageId not found locally after successful delete?!",
           );
         }
+        // --- End Immediate UI Update ---
+
+        // Backend emits socket event to *other* users. No need for admin to wait for it.
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Message deleted.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
       } else {
-        if (expireAt != null && expireAt.isAfter(now)) {
-          title = "Burnout Message";
-          content.add(const Text("This message will expire on:"));
-        } else {
-          title = "Expired Message";
-          content.add(const Text("This message has expired."));
-        }
-      }
-      // Add expiry time if relevant
-      if (expireAt != null && expireAt.isAfter(now)) {
-        content.add(const SizedBox(height: 8));
-        content.add(Text("Expires: ${_formatDateTimeUserFriendly(expireAt)}"));
-      } else if (expireAt != null) {
-        // Show past expiry if it existed
-        content.add(const SizedBox(height: 8));
-        content.add(
-          Text(
-            "(Expired: ${_formatDateTimeUserFriendly(expireAt)})",
-            style: const TextStyle(color: Colors.grey),
+        final errorBody = jsonDecode(response.body);
+        debugPrint(
+          "[GroupChatScreen DELETE] API Error: ${response.statusCode} - ${errorBody['error']}",
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to delete message: ${errorBody['error'] ?? 'Server error'}',
+            ),
           ),
         );
       }
-    } else {
-      content.add(const Text("Standard group message."));
-      // Add sent time for standard messages
-      final String? timeStr =
-          messageData['time']; // Assuming the map has the original ISO string time
-      final DateTime? sentTime =
-          timeStr != null ? DateTime.tryParse(timeStr)?.toLocal() : null;
-      if (sentTime != null) {
-        content.add(const SizedBox(height: 8));
-        content.add(Text("Sent: ${_formatDateTimeUserFriendly(sentTime)}"));
+    } catch (e) {
+      debugPrint("[GroupChatScreen DELETE] Network Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Network error deleting message: ${e.toString()}'),
+          ),
+        );
       }
     }
-
-    // Add schedule time if it was scheduled (separate from main logic)
-    if (scheduledAt != null) {
-      content.add(const SizedBox(height: 8));
-      content.add(
-        Text("Scheduled: ${_formatDateTimeUserFriendly(scheduledAt)}"),
-      );
-    }
-
-    if (content.isEmpty) content.add(const Text("No details available."));
-
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Text(title),
-            content: SingleChildScrollView(child: ListBody(children: content)),
-            actions: [
-              TextButton(
-                child: const Text("OK"),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ],
-          ),
-    );
   }
 }

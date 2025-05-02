@@ -30,6 +30,10 @@ class SocketService {
   final StreamController<Map<String, dynamic>> _groupMessageExpiredController =
       StreamController<Map<String, dynamic>>.broadcast();
 
+  // NEW Stream for Group Message Deletion
+  final StreamController<Map<String, dynamic>> _groupMessageDeletedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
   Stream<Map<String, dynamic>> get onMessageReceived =>
       _messageController.stream;
   Stream<String> get onMessageExpired => _messageExpiredController.stream;
@@ -45,6 +49,10 @@ class SocketService {
   // NEW Public Stream for Group Message Expiry
   Stream<Map<String, dynamic>> get onGroupMessageExpired =>
       _groupMessageExpiredController.stream;
+
+  // NEW Public Stream for Group Message Deletion
+  Stream<Map<String, dynamic>> get onGroupMessageDeleted =>
+      _groupMessageDeletedController.stream;
 
   String? _userId;
   bool get isConnected => _socket?.connected ?? false;
@@ -125,6 +133,7 @@ class SocketService {
     _socket!.off('receiveGroupMessage');
     _socket!.off('groupMessageSent');
     _socket!.off('groupMessageExpired');
+    _socket!.off('groupMessageDeleted');
 
     _socket!.onConnect((_) {
       print('[SocketService ON connect] Socket connected! ID: ${_socket?.id}');
@@ -252,6 +261,24 @@ class SocketService {
         );
       }
     });
+
+    // --- NEW Group Message Deleted Listener ---
+    _socket!.on('groupMessageDeleted', (data) {
+      print('[SocketService ON groupMessageDeleted] Raw Data Received: $data');
+      if (data is Map<String, dynamic> &&
+          data['messageId'] is String &&
+          data['groupId'] is String) {
+        print(
+          '[SocketService ON groupMessageDeleted] Pushing data to group deletion stream controller...',
+        );
+        _groupMessageDeletedController.add(data); // Pass the whole map
+      } else {
+        print(
+          '[SocketService ON groupMessageDeleted] Received invalid group deletion format',
+        );
+      }
+    });
+    // --- End NEW Group Message Deleted Listener ---
   }
 
   // --- Modified emit for General Purpose ---
@@ -309,5 +336,16 @@ class SocketService {
     _userId = null; // Clear userId on explicit disconnect
     _socket?.dispose();
     _socket = null;
+  }
+
+  // Close stream controllers when service is disposed (though as singleton, likely lives forever)
+  void disposeStreams() {
+    _messageController.close();
+    _messageExpiredController.close();
+    _messageSentController.close();
+    _groupMessageController.close();
+    _groupMessageSentController.close();
+    _groupMessageExpiredController.close();
+    _groupMessageDeletedController.close(); // Close the new controller
   }
 }
