@@ -49,8 +49,7 @@ dependencies:
   cached_network_image: ^3.4.1
   mime: ^2.0.0
   pinput: ^4.0.0
-  # Check for the latest version on pub.dev
-
+  profanity_filter: ^2.0.0
   path: any
   http_parser: any
 dev_dependencies:

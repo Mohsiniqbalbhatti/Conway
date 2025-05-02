@@ -8,6 +8,7 @@ import '../../constants/api_config.dart';
 import 'group_settings_screen.dart'; // Import the new settings screen
 import '../../services/socket_service.dart'; // Import SocketService
 import 'dart:async'; // Import async
+import 'package:profanity_filter/profanity_filter.dart'; // Import the filter
 // Added for member avatars later
 
 class GroupChatScreen extends StatefulWidget {
@@ -33,6 +34,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   final ScrollController _scrollController = ScrollController();
   final Color _primaryColor = const Color(0xFF19BFB7);
   final Color _secondaryColor = const Color(0xFF59A52C);
+  final ProfanityFilter _filter = ProfanityFilter(); // Create a filter instance
 
   List<Map<String, dynamic>> _messages = []; // Use this for real messages
   bool _isLoading = true; // Start as loading
@@ -502,6 +504,20 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   void _sendMessage() {
     final messageText = _messageController.text.trim();
     if (messageText.isEmpty || _currentUser == null) return;
+
+    // --- CENSORSHIP CHECK ---
+    if (_filter.hasProfanity(messageText)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Message contains inappropriate language and cannot be sent.',
+          ),
+          backgroundColor: Colors.orangeAccent, // Warning color
+        ),
+      );
+      return; // Stop processing the message
+    }
+    // --- END CENSORSHIP CHECK ---
 
     // Get schedule/burnout times from state
     final DateTime? scheduleTime = _scheduledTime;

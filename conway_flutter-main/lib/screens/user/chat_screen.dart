@@ -8,6 +8,7 @@ import '../../services/socket_service.dart';
 import '../../constants/api_config.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:profanity_filter/profanity_filter.dart';
 
 class ChatScreen extends StatefulWidget {
   final String userName;
@@ -33,6 +34,7 @@ class ChatScreenState extends State<ChatScreen> {
   final Color _primaryColor = const Color(0xFF19BFB7);
   final Color _secondaryColor = const Color(0xFF59A52C);
   final SocketService _socketService = SocketService();
+  final ProfanityFilter _filter = ProfanityFilter();
 
   List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
@@ -365,6 +367,18 @@ class ChatScreenState extends State<ChatScreen> {
   Future<void> _sendMessage() async {
     final messageText = _messageController.text.trim();
     if (messageText.isEmpty || _currentUser == null) return;
+
+    if (_filter.hasProfanity(messageText)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Message contains inappropriate language and cannot be sent.',
+          ),
+          backgroundColor: Colors.orangeAccent,
+        ),
+      );
+      return;
+    }
 
     final tempId = 'optimistic_${DateTime.now().millisecondsSinceEpoch}';
     _messageController.clear();
