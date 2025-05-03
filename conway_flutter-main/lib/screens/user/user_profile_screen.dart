@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'package:conway/screens/guest/verify_email_change_screen.dart'; // Import the new OTP screen
+import 'package:image_picker/image_picker.dart'; // Import image_picker
 
 // Rename to reflect editing capability
 class EditProfileScreen extends StatefulWidget {
@@ -182,6 +183,71 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  // Upload image to backend and return URL
+  Future<String?> _uploadImage(XFile image) async {
+    try {
+      // Create multipart request
+      final request = http.MultipartRequest(
+        'POST',
+        // CORRECTED: Use the full API path including /api/user/
+        Uri.parse('${ApiConfig.baseUrl}/api/user/profile-picture'),
+      );
+
+      // Add fields
+      // Add the userId to associate the picture with the user
+      request.fields['userId'] = widget.currentUser.id.toString();
+
+      // Add file
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'profileImage', // Field name MUST match upload.single() in backend
+          image.path,
+          // Optionally set content type
+          // contentType: MediaType('image', 'jpeg'), // Example
+        ),
+      );
+
+      // Send request
+      final streamedResponse = await request.send();
+
+      // Read response
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (!mounted) return null;
+
+      if (response.statusCode == 200) {
+        final responseData = jsonDecode(response.body);
+        // Update the state with the new URL from the response
+        setState(() {
+          _profileUrlState = responseData['profileUrl'] as String?;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile picture updated!')),
+        );
+        // Return the URL in case the caller needs it
+        return responseData['profileUrl'] as String?;
+      } else {
+        // Handle upload error
+        final errorBody = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Image upload failed: ${response.statusCode} - ${errorBody?['message'] ?? 'Unknown upload error'}',
+            ),
+          ),
+        );
+        return null;
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error uploading image: ${e.toString()}')),
+        );
+      }
+      return null;
     }
   }
 

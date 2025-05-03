@@ -47,10 +47,11 @@ io.on("connection", (socket) => {
     );
     if (userId) {
       const userIdStr = userId.toString();
+      socket.userId = userIdStr; // Store userId on the socket object
       userSockets.set(userIdStr, socket.id);
       socket.join(userIdStr);
       console.log(
-        `[Socket JOIN] Mapped userId '${userIdStr}' to socket ${socket.id}`
+        `[Socket JOIN] Mapped userId '${userIdStr}' to socket ${socket.id} and stored on socket object.`
       );
       console.log(
         "[Socket JOIN] Current userSockets map:",
@@ -387,6 +388,123 @@ io.on("connection", (socket) => {
       socket.emit("messageError", { message: "Server error sending message" });
     }
   });
+
+  // --- Handle Message Deletion ---
+  socket.on("deleteMessage", async (data) => {
+    console.log("[Socket DELETE] deleteMessage event received:", data);
+    const { messageId, groupId } = data;
+    const requesterUserId = socket.userId; // Get userId stored during join
+
+    // Basic validation
+    if (!messageId || !groupId || !requesterUserId) {
+      console.error(
+        "[Socket DELETE] Invalid delete data (missing messageId, groupId, or requesterUserId):",
+        data
+      );
+      socket.emit("messageDeleteError", {
+        messageId: messageId,
+        message: "Invalid request data.",
+      });
+      return;
+    }
+
+    try {
+      // Fetch message, populate sender and group (with admins)
+      const message = await Message.findById(messageId)
+        .populate("sender") // Populate full sender doc
+        .populate("group"); // Populate full group doc
+
+      if (!message) {
+        console.error(`[Socket DELETE] Message not found for ID: ${messageId}`);
+        socket.emit("messageDeleteError", {
+          messageId: messageId,
+          message: "Message not found.",
+        });
+        return;
+      }
+
+      // Check if the populated group matches the provided groupId
+      if (!message.group || message.group._id.toString() !== groupId) {
+        console.error(
+          `[Socket DELETE] Message ${messageId} does not belong to group ${groupId}.`
+        );
+        socket.emit("messageDeleteError", {
+          messageId: messageId,
+          message: "Group mismatch.",
+        });
+        return;
+      }
+
+      // Permission check: Requester must be the sender OR a group admin
+      const isSender = message.sender?._id.toString() === requesterUserId;
+      // Corrected Admin Check: Compare requester to the group's creator
+      const isAdmin = message.group.creator?.toString() === requesterUserId;
+
+      console.log(
+        `[Socket DELETE] Checking permissions for user ${requesterUserId} on msg ${messageId}: Sender=${isSender}, Admin=${isAdmin}`
+      );
+
+      if (!isSender && !isAdmin) {
+        console.warn(
+          `[Socket DELETE] Permission denied for user ${requesterUserId} to delete message ${messageId}.`
+        );
+        socket.emit("messageDeleteError", {
+          messageId: messageId,
+          message: "Permission denied.",
+        });
+        return;
+      }
+
+      // --- Permission Granted: Update the message ---
+      const deletedPlaceholder = "message deleted";
+      message.message = deletedPlaceholder;
+      message.isEdited = true; // Indicate change
+      // Optionally mark with deleted_at if needed for other logic, but changing text is key for UI
+      message.deleted_at = new Date();
+      await message.save();
+
+      console.log(
+        `[Socket DELETE] Message ${messageId} content updated to '${deletedPlaceholder}' by user ${requesterUserId}.`
+      );
+
+      // --- Broadcast the deletion to group members ---
+      const deletionUpdatePayload = {
+        messageId: messageId,
+        groupId: groupId,
+        deletedByUserId: requesterUserId,
+        deletedByAdmin: isAdmin,
+        deletedAt: message.deleted_at.toISOString(),
+      };
+
+      message.group.users.forEach((userId) => {
+        const memberIdStr = userId.toString();
+        const memberSocketId = userSockets.get(memberIdStr);
+        if (memberSocketId) {
+          console.log(
+            `[Socket DELETE] Emitting messageDeleted to member ${memberIdStr} (Socket: ${memberSocketId}) for msg ${messageId}`
+          );
+          io.to(memberSocketId).emit("messageDeleted", deletionUpdatePayload);
+        } else {
+          console.log(
+            `[Socket DELETE] Member ${memberIdStr} for group ${groupId} is OFFLINE.`
+          );
+        }
+      });
+
+      // Optionally confirm success back to the requester
+      socket.emit("messageDeleteSuccess", { messageId: messageId });
+    } catch (error) {
+      console.error(
+        `[Socket DELETE] Error handling deleteMessage for message ${messageId}:`,
+        error
+      );
+      socket.emit("messageDeleteError", {
+        messageId: messageId,
+        message: "Server error deleting message.",
+      });
+    }
+  });
+  // --- End Handle Message Deletion ---
 
   socket.on("disconnect", () => {
     console.log(`[Socket DISCONNECT] User disconnected: ${socket.id}`);

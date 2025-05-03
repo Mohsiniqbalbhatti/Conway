@@ -35,6 +35,14 @@ class SocketService {
   final StreamController<Map<String, dynamic>> _groupMessageDeletedController =
       StreamController<Map<String, dynamic>>.broadcast();
 
+  // NEW: Stream for message deletion errors (applies to group/direct)
+  final StreamController<Map<String, dynamic>> _messageDeleteErrorController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
+  // NEW: Stream for message deletion success confirmations (applies to group/direct)
+  final StreamController<Map<String, dynamic>> _messageDeleteSuccessController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
   Stream<Map<String, dynamic>> get onMessageReceived =>
       _messageController.stream;
   Stream<String> get onMessageExpired => _messageExpiredController.stream;
@@ -54,6 +62,14 @@ class SocketService {
   // NEW Public Stream for Group Message Deletion
   Stream<Map<String, dynamic>> get onGroupMessageDeleted =>
       _groupMessageDeletedController.stream;
+
+  // NEW: Stream for message deletion errors (applies to group/direct)
+  Stream<Map<String, dynamic>> get onMessageDeleteError =>
+      _messageDeleteErrorController.stream;
+
+  // NEW: Stream for message deletion success confirmations (applies to group/direct)
+  Stream<Map<String, dynamic>> get onMessageDeleteSuccess =>
+      _messageDeleteSuccessController.stream;
 
   String? _userId;
   bool get isConnected => _socket?.connected ?? false;
@@ -290,6 +306,33 @@ class SocketService {
       }
     });
     // --- End NEW Group Message Deleted Listener ---
+
+    // NEW: Listeners for delete feedback
+    _socket!.on('messageDeleteError', (data) {
+      debugPrint(
+        '[SocketService ON messageDeleteError] Error from server: $data',
+      );
+      if (data is Map<String, dynamic>) {
+        _messageDeleteErrorController.add(data);
+      } else {
+        debugPrint(
+          '[SocketService ON messageDeleteError] Received invalid delete error format: $data',
+        );
+      }
+    });
+
+    _socket!.on('messageDeleteSuccess', (data) {
+      debugPrint(
+        '[SocketService ON messageDeleteSuccess] Success confirmation from server: $data',
+      );
+      if (data is Map<String, dynamic>) {
+        _messageDeleteSuccessController.add(data);
+      } else {
+        debugPrint(
+          '[SocketService ON messageDeleteSuccess] Received invalid delete success format: $data',
+        );
+      }
+    });
   }
 
   // --- Modified emit for General Purpose ---
@@ -358,5 +401,7 @@ class SocketService {
     _groupMessageSentController.close();
     _groupMessageExpiredController.close();
     _groupMessageDeletedController.close(); // Close the new controller
+    _messageDeleteErrorController.close();
+    _messageDeleteSuccessController.close();
   }
 }

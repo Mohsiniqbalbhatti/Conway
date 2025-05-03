@@ -39,6 +39,7 @@ router.post("/groups", async (req, res) => {
       creator,
       deleted_at,
       users: [creator],
+      admins: [creator],
     });
     await group.save();
     res.send({ message: "Group created", group });

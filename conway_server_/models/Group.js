@@ -22,6 +22,12 @@ const groupSchema = new mongoose.Schema({
       ref: "User",
     },
   ],
+  admins: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+  ],
   createdAt: {
     type: Date,
     default: Date.now,

@@ -49,6 +49,9 @@ class GroupChatScreenState extends State<GroupChatScreen> {
   StreamSubscription? _groupMessageSentSubscription;
   StreamSubscription? _groupMessageExpiredSubscription; // NEW: For expiry
   StreamSubscription? _groupMessageDeletedSubscription; // NEW: For deletion
+  // NEW: Subscriptions for delete feedback
+  StreamSubscription? _messageDeleteErrorSubscription;
+  StreamSubscription? _messageDeleteSuccessSubscription;
 
   // NEW: State for Burnout/Schedule
   DateTime? _scheduledTime;
@@ -207,6 +210,36 @@ class GroupChatScreenState extends State<GroupChatScreen> {
           );
           _handleGroupMessageDeleted(deletedData);
         });
+
+    // NEW: Listen for delete errors
+    _messageDeleteErrorSubscription = _socketService.onMessageDeleteError.listen((
+      errorData,
+    ) {
+      final message = errorData['message'] ?? 'Unknown error';
+      final messageId = errorData['messageId'] ?? 'unknown ID';
+      debugPrint(
+        "[GroupChatScreen DELETE ERROR] Failed for message $messageId: $message",
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error deleting message: $message'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      // Optionally, revert optimistic UI changes if needed
+    });
+
+    // NEW: Listen for delete success (optional feedback)
+    _messageDeleteSuccessSubscription = _socketService.onMessageDeleteSuccess
+        .listen((successData) {
+          final messageId = successData['messageId'] ?? 'unknown ID';
+          debugPrint(
+            "[GroupChatScreen DELETE SUCCESS] Confirmed for message $messageId",
+          );
+          // You might not need explicit feedback here if the UI update is sufficient
+        });
   }
 
   void _handleReceivedGroupMessage(Map<String, dynamic> messageData) {
@@ -355,9 +388,14 @@ class GroupChatScreenState extends State<GroupChatScreen> {
   void _handleGroupMessageDeleted(Map<String, dynamic> deletedData) {
     final messageId = deletedData['messageId'] as String?;
     final receivedGroupId = deletedData['groupId'] as String?;
+    // --- Get context from server ---
+    final deletedByUserId = deletedData['deletedByUserId'] as String?;
+    final deletedByAdmin = deletedData['deletedByAdmin'] as bool? ?? false;
+    final deletedAtStr = deletedData['deletedAt'] as String?;
+    // --- End Get context ---
 
     debugPrint(
-      "[GroupChatScreen DELETE EVENT] Received deletion event for message: $messageId in group: $receivedGroupId",
+      "[GroupChatScreen DELETE EVENT] Received deletion event for message: $messageId in group: $receivedGroupId. Deleted by: $deletedByUserId (Admin: $deletedByAdmin)",
     );
 
     if (messageId == null || receivedGroupId != widget.groupId) {
@@ -382,7 +420,16 @@ class GroupChatScreenState extends State<GroupChatScreen> {
         updatedMessages[index] = {
           ...updatedMessages[index], // Spread existing key-value pairs
           'deleted_at':
-              DateTime.now().toUtc().toIso8601String(), // Add/update deleted_at
+              deletedAtStr ??
+              DateTime.now()
+                  .toUtc()
+                  .toIso8601String(), // Use server time if available
+          // --- Set flag based on server confirmation ---
+          'deletedByAdminServer':
+              deletedByAdmin && deletedByUserId != _currentUser?.id.toString(),
+          // Clear optimistic flag if it existed
+          'deleted_by_me_optimistic': null,
+          // --- End Set flag ---
         };
 
         // Update the state with the new list
@@ -515,6 +562,10 @@ class GroupChatScreenState extends State<GroupChatScreen> {
     _groupMessageSentSubscription?.cancel();
     _groupMessageExpiredSubscription?.cancel();
     _groupMessageDeletedSubscription?.cancel(); // NEW
+    // NEW: Cancel delete feedback subscriptions
+    _messageDeleteErrorSubscription?.cancel();
+    _messageDeleteSuccessSubscription?.cancel();
+
     // Consider disconnecting socket if appropriate for app lifecycle
     // _socketService.disconnect();
     super.dispose();
@@ -1038,20 +1089,7 @@ class GroupChatScreenState extends State<GroupChatScreen> {
     );
 
     return GestureDetector(
-      onLongPress: () {
-        // Add this debug print:
-        debugPrint(
-          "[GroupChatScreen LongPress] Checking admin status: _isAdmin = $_isAdmin (Current User ID: ${_currentUser?.id}, Creator ID: $_creatorId)",
-        );
-
-        if (_isAdmin && !isOptimistic && !failedToSend) {
-          // Only allow admin to delete confirmed messages
-          _showMessageAdminOptions(messageId);
-        } else {
-          // Optionally show standard info dialog for non-admins or pending messages
-          _showMessageDetailsDialog(messageData);
-        }
-      },
+      onLongPress: () => _handleLongPress(messageData),
       child: Opacity(
         opacity: isOptimistic ? 0.7 : 1.0,
         child: Padding(
@@ -1111,22 +1149,27 @@ class GroupChatScreenState extends State<GroupChatScreen> {
   // Builds the placeholder for a deleted message
   Widget _buildDeletedMessagePlaceholder(Map<String, dynamic> messageData) {
     final String time = _formatTime(messageData['time']);
+    final bool isMe = messageData['isMe'] ?? false;
 
-    // Determine text based on whether the CURRENT USER is the admin
+    // Determine text based on whether the CURRENT USER deleted it (or if admin)
+    // Use the optimistic flag if available, otherwise determine from server data
+    final bool deletedByMe = messageData['deleted_by_me_optimistic'] ?? false;
+    final bool deletedByAdminFromServer =
+        messageData['deletedByAdminServer'] ??
+        false; // We'll set this in the handler
+
     final String deletedText =
-        _isAdmin
-            ? "You deleted this message" // If I am admin, I must have deleted it
-            : "Message deleted by admin"; // If I am not admin, an admin deleted it
+        deletedByMe
+            ? "You deleted this message"
+            : deletedByAdminFromServer
+            ? "Message deleted by admin"
+            : "Message deleted"; // Default/fallback
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        // Align based on original sender still? Or always left align deleted?
-        // Let's keep alignment based on original sender for consistency.
         mainAxisAlignment:
-            (messageData['isMe'] ?? false)
-                ? MainAxisAlignment.end
-                : MainAxisAlignment.start,
+            isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
           Flexible(
             child: Container(
@@ -1168,45 +1211,68 @@ class GroupChatScreenState extends State<GroupChatScreen> {
 
   // --- Dialogs ---
 
-  // NEW: Show options for admin on long press
-  void _showMessageAdminOptions(String messageId) {
+  // --- NEW: Handle Long Press ---
+  void _handleLongPress(Map<String, dynamic> messageData) {
+    final String messageId = messageData['id'];
+    final String senderId = messageData['senderId'] ?? '';
+    final bool isMe = messageData['isMe'] ?? false;
+    final bool isOptimistic = messageData['isOptimistic'] ?? false;
+    final bool failedToSend = messageData['failedToSend'] ?? false;
+    final bool isDeleted = messageData['deleted_at'] != null;
+
+    // Don't show options for deleted, pending, or failed messages
+    if (isDeleted || isOptimistic || failedToSend) return;
+
+    // Check permission
+    final currentUserId = _currentUser?.id.toString();
+    final bool canDelete = (isMe || _isAdmin);
+
+    debugPrint(
+      "[GroupChatScreen LongPress] Msg: $messageId, Sender: $senderId, isMe: $isMe, isAdmin: $_isAdmin, CanDelete: $canDelete",
+    );
+
+    _showActionOptionsDialog(messageData, canDelete);
+  }
+  // --- END NEW ---
+
+  // --- NEW: Show General Action Options ---
+  void _showActionOptionsDialog(
+    Map<String, dynamic> messageData,
+    bool canDelete,
+  ) {
+    final String messageId = messageData['id'];
+
     showModalBottomSheet(
       context: context,
       builder: (BuildContext context) {
         return SafeArea(
           child: Wrap(
             children: <Widget>[
-              ListTile(
-                leading: Icon(Icons.delete_forever, color: Colors.red[700]),
-                title: Text(
-                  'Delete for Everyone',
-                  style: TextStyle(color: Colors.red[700]),
+              // --- NEW: Conditional Delete Option ---
+              if (canDelete)
+                ListTile(
+                  leading: Icon(Icons.delete_outline, color: Colors.red[700]),
+                  title: Text(
+                    'Delete for Everyone',
+                    style: TextStyle(color: Colors.red[700]),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context); // Close the bottom sheet
+                    if (mounted) {
+                      _showDeleteConfirmationDialog(
+                        messageId,
+                      ); // Show confirmation
+                    }
+                  },
                 ),
-                onTap: () {
-                  Navigator.pop(context); // Close the bottom sheet
-                  // Guard action after pop
-                  if (mounted) {
-                    _showDeleteConfirmationDialog(
-                      messageId,
-                    ); // Show confirmation
-                  }
-                },
-              ),
+              // --- END NEW ---
               ListTile(
                 leading: const Icon(Icons.info_outline),
                 title: const Text('Message Info'),
                 onTap: () {
                   Navigator.pop(context);
-                  // Guard action after pop
                   if (mounted) {
-                    // Find the message data to show details
-                    final messageData = _messages.firstWhere(
-                      (msg) => msg['id'] == messageId,
-                      orElse: () => {},
-                    );
-                    if (messageData.isNotEmpty) {
-                      _showMessageDetailsDialog(messageData);
-                    }
+                    _showMessageDetailsDialog(messageData);
                   }
                 },
               ),
@@ -1223,6 +1289,10 @@ class GroupChatScreenState extends State<GroupChatScreen> {
       },
     );
   }
+  // --- END NEW ---
+
+  // NEW: Show options for admin on long press
+  // void _showMessageAdminOptions(String messageId) { ... } // Removed this, replaced by _showActionOptionsDialog
 
   // NEW: Confirmation dialog for deletion
   void _showDeleteConfirmationDialog(String messageId) {
@@ -1251,7 +1321,9 @@ class GroupChatScreenState extends State<GroupChatScreen> {
                 // Guard pop and delete action
                 if (mounted) {
                   Navigator.of(context).pop(); // Close the dialog
-                  _deleteMessage(messageId); // Proceed with deletion
+                  _emitDeleteMessage(
+                    messageId,
+                  ); // NEW: Emit socket event instead
                 }
               },
             ),
@@ -1291,9 +1363,21 @@ class GroupChatScreenState extends State<GroupChatScreen> {
         Text(
           isMe
               ? "You deleted this message."
-              : "This message was deleted by the admin.",
+              // TODO: Get who deleted it? For now, generic.
+              : "This message was deleted.",
         ),
       );
+      final String? deletedAtStr = messageData['deleted_at'];
+      final DateTime? deletedTime =
+          deletedAtStr != null
+              ? DateTime.tryParse(deletedAtStr)?.toLocal()
+              : null;
+      if (deletedTime != null) {
+        content.add(SizedBox(height: 8));
+        content.add(
+          Text("Deleted: ${_formatDateTimeUserFriendly(deletedTime)}"),
+        );
+      }
     } else {
       // Original logic for non-deleted messages
       content.add(
@@ -1520,103 +1604,47 @@ class GroupChatScreenState extends State<GroupChatScreen> {
   }
 
   // --- NEW: Delete Message Logic ---
-  Future<void> _deleteMessage(String messageId) async {
-    if (!_isAdmin || _currentUser == null) {
+  // Future<void> _deleteMessage(String messageId) async { ... } // Removed this, replaced by _emitDeleteMessage
+
+  // --- NEW: Emit Delete Event via Socket ---
+  void _emitDeleteMessage(String messageId) {
+    if (_currentUser == null) {
       debugPrint(
-        "[GroupChatScreen DELETE] Not admin or user not loaded. Cannot delete.",
+        "[GroupChatScreen EmitDelete] Cannot delete, user not loaded.",
       );
       return;
     }
-
     debugPrint(
-      "[GroupChatScreen DELETE] Attempting to delete message $messageId",
+      "[GroupChatScreen EmitDelete] Emitting deleteMessage for ID: $messageId in Group: ${widget.groupId}",
     );
-
-    // Optional: Show a temporary loading indicator on the message itself?
-
-    try {
-      final response = await http
-          .delete(
-            Uri.parse('${ApiConfig.baseUrl}/messages/$messageId'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'userId':
-                  _currentUser!.id, // Send current user ID for backend auth
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
-
-      if (!mounted) return;
-
-      if (response.statusCode == 200) {
+    _socketService.emit('deleteMessage', {
+      'messageId': messageId,
+      'groupId': widget.groupId,
+      // No need to send userId, server gets it from socket connection
+    });
+    // --- Optimistic UI Update ---
+    // Find the message locally and mark it as deleted immediately
+    final index = _messages.indexWhere((msg) => msg['id'] == messageId);
+    if (index != -1 && mounted) {
+      setState(() {
+        // Create a new map to avoid modifying the original directly
+        final updatedMessage = Map<String, dynamic>.from(_messages[index]);
+        // Mark as deleted using a timestamp and add who deleted it locally
+        updatedMessage['deleted_at'] = DateTime.now().toUtc().toIso8601String();
+        updatedMessage['deleted_by_me_optimistic'] =
+            true; // Flag that the current user initiated this deletion
+        _messages[index] = updatedMessage;
         debugPrint(
-          "[GroupChatScreen DELETE] API call successful for message $messageId.",
+          "[GroupChatScreen EmitDelete] Optimistically marked message $messageId as deleted.",
         );
-        // --- IMPORTANT: Update UI immediately for the admin ---
-        // Find the index of the message
-        final index = _messages.indexWhere((msg) => msg['id'] == messageId);
-        if (index != -1) {
-          // Create a new list with the updated message state
-          final updatedMessages = List<Map<String, dynamic>>.from(_messages);
-          updatedMessages[index] = {
-            ...updatedMessages[index],
-            'deleted_at':
-                DateTime.now()
-                    .toUtc()
-                    .toIso8601String(), // Mark as deleted locally
-          };
-          // Update state immediately (Guarded)
-          if (mounted) {
-            setState(() {
-              _messages = updatedMessages;
-            });
-          }
-          debugPrint(
-            "[GroupChatScreen DELETE] Updated local UI for deleted message $messageId.",
-          );
-        } else {
-          debugPrint(
-            "[GroupChatScreen DELETE] Message $messageId not found locally after successful delete?!",
-          );
-        }
-        // --- End Immediate UI Update ---
-
-        // Backend emits socket event to *other* users. No need for admin to wait for it.
-        // Guard snackbar
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Message deleted.'),
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-      } else {
-        final errorBody = jsonDecode(response.body);
-        debugPrint(
-          "[GroupChatScreen DELETE] API Error: ${response.statusCode} - ${errorBody['error']}",
-        );
-        // Guard snackbar
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Failed to delete message: ${errorBody['error'] ?? 'Server error'}',
-              ),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint("[GroupChatScreen DELETE] Network Error: $e");
-      if (mounted) {
-        // Guard snackbar
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Network error deleting message: ${e.toString()}'),
-          ),
-        );
-      }
+      });
+    } else {
+      debugPrint(
+        "[GroupChatScreen EmitDelete] Could not find message $messageId locally for optimistic update.",
+      );
     }
+    // --- End Optimistic UI Update ---
   }
+
+  // --- END NEW ---
 }
