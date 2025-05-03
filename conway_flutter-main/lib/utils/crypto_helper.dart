@@ -1,5 +1,5 @@
-import 'dart:convert';
 import 'package:encrypt/encrypt.dart' as encrypt;
+import 'package:flutter/foundation.dart'; // Import for debugPrint
 
 class CryptoHelper {
   // IMPORTANT: Replace with your actual secure key stored safely!
@@ -27,7 +27,7 @@ class CryptoHelper {
       // Consider environment variables, secure storage, or a configuration service.
 
       if (base64Key == 'YOUR_SECURE_32_BYTE_BASE64_ENCODED_KEY_HERE') {
-        print(
+        debugPrint(
           '\n\n*** WARNING: Using placeholder encryption key in CryptoHelper! Replace this immediately. ***\n\n',
         );
         // You might throw an error here in production builds
@@ -53,7 +53,7 @@ class CryptoHelper {
       final encrypted = _encrypter.encrypt(plainText, iv: _iv);
       return encrypted.base64;
     } catch (e) {
-      print("Encryption Error: $e");
+      debugPrint("Encryption Error: $e");
       return plainText; // Return original on error? Or handle differently.
     }
   }
@@ -64,7 +64,7 @@ class CryptoHelper {
       final decrypted = _encrypter.decrypt(encryptedData, iv: _iv);
       return decrypted;
     } catch (e) {
-      print("Decryption Error: $e - Input: $encryptedText");
+      debugPrint("Decryption Error: $e - Input: $encryptedText");
       // Handle error appropriately - maybe return the encrypted text or a specific error message?
       // Returning the encrypted text might leak it in the UI.
       return '{Decryption Failed}';

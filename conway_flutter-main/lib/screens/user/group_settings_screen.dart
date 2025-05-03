@@ -22,10 +22,10 @@ class GroupSettingsScreen extends StatefulWidget {
   });
 
   @override
-  _GroupSettingsScreenState createState() => _GroupSettingsScreenState();
+  GroupSettingsScreenState createState() => GroupSettingsScreenState();
 }
 
-class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
+class GroupSettingsScreenState extends State<GroupSettingsScreen> {
   bool _isAdmin = false;
   bool _isLoading = true;
   String? _creatorId;

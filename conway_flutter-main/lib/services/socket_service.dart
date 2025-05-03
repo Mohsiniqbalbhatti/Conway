@@ -1,5 +1,6 @@
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'dart:async';
+import 'package:flutter/foundation.dart'; // Import for debugPrint
 import '../constants/api_config.dart'; // For base URL
 
 class SocketService {
@@ -11,7 +12,7 @@ class SocketService {
   SocketService._internal();
   // --- End Singleton Setup ---
 
-  IO.Socket? _socket;
+  io.Socket? _socket;
   // Streams for Direct Messages
   final StreamController<Map<String, dynamic>> _messageController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -59,13 +60,13 @@ class SocketService {
 
   void connect(String userId) {
     if (userId.isEmpty) {
-      print("[SocketService] Connect called with empty userId. Aborting.");
+      debugPrint("[SocketService] Connect called with empty userId. Aborting.");
       return;
     }
 
     // If trying to connect for the *same* user and already connected, ensure join is emitted.
     if (_userId == userId && isConnected) {
-      print(
+      debugPrint(
         "[SocketService] Already connected for user $userId. Re-emitting join event.",
       );
       _socket!.emit(
@@ -76,14 +77,16 @@ class SocketService {
     }
 
     // If switching users or connecting for the first time/after disconnect
-    print(
+    debugPrint(
       "[SocketService] Attempting to connect/reconnect for user: $userId (Previous userId: $_userId)",
     );
     _userId = userId; // Set userId *before* initiating connection attempt
 
     // Ensure previous socket is disposed if exists
     if (_socket != null) {
-      print("[SocketService] Disposing existing socket before new connection.");
+      debugPrint(
+        "[SocketService] Disposing existing socket before new connection.",
+      );
       _socket!.dispose();
       _socket = null;
     }
@@ -91,9 +94,9 @@ class SocketService {
     try {
       final uri = Uri.parse(ApiConfig.baseUrl);
       final socketUrl = '${uri.scheme}://${uri.host}:${uri.port}';
-      print('[SocketService] Connecting socket to: $socketUrl');
+      debugPrint('[SocketService] Connecting socket to: $socketUrl');
 
-      _socket = IO.io(socketUrl, <String, dynamic>{
+      _socket = io.io(socketUrl, <String, dynamic>{
         'transports': ['websocket'],
         'autoConnect': false, // Connect manually after listeners are set
         'reconnection': true,
@@ -106,16 +109,16 @@ class SocketService {
       _setupListeners();
 
       // Manually connect
-      print('[SocketService] Calling socket.connect()...');
+      debugPrint('[SocketService] Calling socket.connect()...');
       _socket!.connect();
     } catch (e) {
-      print('[SocketService] Socket connection exception: $e');
+      debugPrint('[SocketService] Socket connection exception: $e');
     }
   }
 
   void _setupListeners() {
     if (_socket == null) {
-      print('[SocketService setupListeners] Error: Socket is null.');
+      debugPrint('[SocketService setupListeners] Error: Socket is null.');
       return;
     }
 
@@ -136,37 +139,41 @@ class SocketService {
     _socket!.off('groupMessageDeleted');
 
     _socket!.onConnect((_) {
-      print('[SocketService ON connect] Socket connected! ID: ${_socket?.id}');
+      debugPrint(
+        '[SocketService ON connect] Socket connected! ID: ${_socket?.id}',
+      );
       if (_userId != null && _userId!.isNotEmpty) {
-        print(
+        debugPrint(
           '[SocketService ON connect] Emitting join event for userId: $_userId',
         );
         _socket!.emit('join', _userId);
       } else {
-        print(
+        debugPrint(
           '[SocketService ON connect] Warning: Cannot emit join, userId is null or empty.',
         );
       }
     });
 
     _socket!.onConnectError(
-      (data) => print('[SocketService ON connect_error] Error: $data'),
+      (data) => debugPrint('[SocketService ON connect_error] Error: $data'),
     );
-    _socket!.onError((data) => print('[SocketService ON error] Error: $data'));
+    _socket!.onError(
+      (data) => debugPrint('[SocketService ON error] Error: $data'),
+    );
     _socket!.onDisconnect((reason) {
-      print('[SocketService ON disconnect] Disconnected. Reason: $reason');
+      debugPrint('[SocketService ON disconnect] Disconnected. Reason: $reason');
       // No need to manually clear _userId here, connect() handles it if needed
     });
 
     _socket!.on('receiveMessage', (data) {
-      print('[SocketService ON receiveMessage] Raw Data Received: $data');
+      debugPrint('[SocketService ON receiveMessage] Raw Data Received: $data');
       if (data is Map<String, dynamic>) {
-        print(
+        debugPrint(
           '[SocketService ON receiveMessage] Pushing data to stream controller...',
         );
         _messageController.add(data);
       } else {
-        print(
+        debugPrint(
           '[SocketService ON receiveMessage] Received invalid message format',
         );
       }
@@ -174,14 +181,16 @@ class SocketService {
 
     // --- NEW Group Message Listener ---
     _socket!.on('receiveGroupMessage', (data) {
-      print('[SocketService ON receiveGroupMessage] Raw Data Received: $data');
+      debugPrint(
+        '[SocketService ON receiveGroupMessage] Raw Data Received: $data',
+      );
       if (data is Map<String, dynamic>) {
-        print(
+        debugPrint(
           '[SocketService ON receiveGroupMessage] Pushing data to group stream controller...',
         );
         _groupMessageController.add(data);
       } else {
-        print(
+        debugPrint(
           '[SocketService ON receiveGroupMessage] Received invalid group message format',
         );
       }
@@ -189,20 +198,20 @@ class SocketService {
     // --- End NEW Group Message Listener ---
 
     _socket!.on('messageError', (data) {
-      print('[SocketService ON messageError] Error from server: $data');
+      debugPrint('[SocketService ON messageError] Error from server: $data');
     });
 
     _socket!.on('messageSent', (data) {
-      print(
+      debugPrint(
         '[SocketService ON messageSent Confirmation] Raw Data Received: $data',
       );
       if (data is Map<String, dynamic>) {
-        print(
+        debugPrint(
           '[SocketService ON messageSent Confirmation] Pushing data to sent stream controller...',
         );
         _messageSentController.add(data);
       } else {
-        print(
+        debugPrint(
           '[SocketService ON messageSent Confirmation] Received invalid confirmation format',
         );
       }
@@ -210,16 +219,16 @@ class SocketService {
 
     // --- NEW Group Message Sent Confirmation Listener ---
     _socket!.on('groupMessageSent', (data) {
-      print(
+      debugPrint(
         '[SocketService ON groupMessageSent Confirmation] Raw Data Received: $data',
       );
       if (data is Map<String, dynamic>) {
-        print(
+        debugPrint(
           '[SocketService ON groupMessageSent Confirmation] Pushing data to group sent stream controller...',
         );
         _groupMessageSentController.add(data);
       } else {
-        print(
+        debugPrint(
           '[SocketService ON groupMessageSent Confirmation] Received invalid group confirmation format',
         );
       }
@@ -228,18 +237,20 @@ class SocketService {
 
     // --- NEW Group Message Expired Listener ---
     _socket!.on('groupMessageExpired', (data) {
-      print('[SocketService ON groupMessageExpired] Raw Data Received: $data');
+      debugPrint(
+        '[SocketService ON groupMessageExpired] Raw Data Received: $data',
+      );
       if (data is Map<String, dynamic> &&
           data['messageId'] is String &&
           data['groupId'] is String) {
-        print(
+        debugPrint(
           '[SocketService ON groupMessageExpired] Pushing data to group expiry stream controller...',
         );
         _groupMessageExpiredController.add(
           data,
         ); // Pass the whole map (messageId, groupId)
       } else {
-        print(
+        debugPrint(
           '[SocketService ON groupMessageExpired] Received invalid group expiry format',
         );
       }
@@ -248,32 +259,32 @@ class SocketService {
 
     // This handles direct message expiry
     _socket!.on('messageExpired', (data) {
-      print('[SocketService ON messageExpired] Raw Data Received: $data');
-      if (data is Map<String, dynamic> && data['messageId'] is String) {
-        final messageId = data['messageId'] as String;
-        print(
-          '[SocketService ON messageExpired] Pushing message ID $messageId to expiry stream...',
+      debugPrint('[SocketService ON messageExpired] Raw Data Received: $data');
+      if (data is String) {
+        // Expecting just the message ID (string)
+        debugPrint(
+          '[SocketService ON messageExpired] Pushing message ID to expiry stream controller...',
         );
-        _messageExpiredController.add(messageId);
+        _messageExpiredController.add(data);
       } else {
-        print(
-          '[SocketService ON messageExpired] Received invalid expiry data format',
+        debugPrint(
+          '[SocketService ON messageExpired] Received invalid expiry format: $data',
         );
       }
     });
 
     // --- NEW Group Message Deleted Listener ---
     _socket!.on('groupMessageDeleted', (data) {
-      print('[SocketService ON groupMessageDeleted] Raw Data Received: $data');
-      if (data is Map<String, dynamic> &&
-          data['messageId'] is String &&
-          data['groupId'] is String) {
-        print(
+      debugPrint(
+        '[SocketService ON groupMessageDeleted] Raw Data Received: $data',
+      );
+      if (data is Map<String, dynamic>) {
+        debugPrint(
           '[SocketService ON groupMessageDeleted] Pushing data to group deletion stream controller...',
         );
-        _groupMessageDeletedController.add(data); // Pass the whole map
+        _groupMessageDeletedController.add(data);
       } else {
-        print(
+        debugPrint(
           '[SocketService ON groupMessageDeleted] Received invalid group deletion format',
         );
       }
@@ -285,10 +296,10 @@ class SocketService {
   // Use this instead of specific sendMessage/sendGroupMessage methods
   void emit(String event, Map<String, dynamic> data) {
     if (isConnected) {
-      print('[SocketService] Emitting event \'$event\' with data: $data');
+      debugPrint('[SocketService] Emitting event \'$event\' with data: $data');
       _socket!.emit(event, data);
     } else {
-      print(
+      debugPrint(
         '[SocketService] Cannot emit event \'$event\': Socket not connected.',
       );
       // Optionally queue the event or show an error
@@ -330,7 +341,7 @@ class SocketService {
   */
 
   void disconnect() {
-    print(
+    debugPrint(
       "[SocketService] disconnect() called. Disposing socket for userId: $_userId",
     );
     _userId = null; // Clear userId on explicit disconnect

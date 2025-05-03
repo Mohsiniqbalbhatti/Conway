@@ -26,10 +26,10 @@ class GroupChatScreen extends StatefulWidget {
   });
 
   @override
-  _GroupChatScreenState createState() => _GroupChatScreenState();
+  GroupChatScreenState createState() => GroupChatScreenState();
 }
 
-class _GroupChatScreenState extends State<GroupChatScreen> {
+class GroupChatScreenState extends State<GroupChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final Color _primaryColor = const Color(0xFF19BFB7);
@@ -91,6 +91,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     } else {
       // Handle error: user data not found
       if (mounted) {
+        // Added guard here
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Error: Could not load user data.')),
         );
@@ -139,6 +140,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         debugPrint(
           "[GroupChatScreen] Error fetching group details: ${response.statusCode}",
         );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Error fetching group details: ${response.statusCode}',
+              ),
+            ),
+          );
+        }
         setState(() => _isFetchingDetails = false);
         // Optionally show error
       }
@@ -147,6 +157,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         debugPrint(
           "[GroupChatScreen] Network error fetching group details: $e",
         );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Network error fetching details: ${e.toString()}'),
+            ),
+          );
+        }
         setState(() => _isFetchingDetails = false);
         // Optionally show error
       }
@@ -395,11 +412,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       );
       setState(() => _isLoading = false);
       // Optionally show a user-facing error message
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not load user data. Please restart.'),
-        ),
-      );
+      if (mounted) {
+        // Added guard here
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not load user data. Please restart.'),
+          ),
+        );
+      }
       return;
     }
 
@@ -909,7 +929,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final bool isOptimistic = messageData['isOptimistic'] ?? false;
     final bool failedToSend = messageData['failedToSend'] ?? false;
     final bool isBurnout = messageData['isBurnout'] ?? false;
-    final String? expireAtStr = messageData['expireAt'];
+    // final String? expireAtStr = messageData['expireAt']; // Unused in bubble
     final bool isScheduled = messageData['isScheduled'] ?? false;
     final String? scheduledAtStr = messageData['scheduledAt'];
     final bool actuallyExpired = messageData['actuallyExpired'] ?? false;
@@ -1164,7 +1184,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 ),
                 onTap: () {
                   Navigator.pop(context); // Close the bottom sheet
-                  _showDeleteConfirmationDialog(messageId); // Show confirmation
+                  // Guard action after pop
+                  if (mounted) {
+                    _showDeleteConfirmationDialog(
+                      messageId,
+                    ); // Show confirmation
+                  }
                 },
               ),
               ListTile(
@@ -1172,13 +1197,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 title: const Text('Message Info'),
                 onTap: () {
                   Navigator.pop(context);
-                  // Find the message data to show details
-                  final messageData = _messages.firstWhere(
-                    (msg) => msg['id'] == messageId,
-                    orElse: () => {},
-                  );
-                  if (messageData.isNotEmpty) {
-                    _showMessageDetailsDialog(messageData);
+                  // Guard action after pop
+                  if (mounted) {
+                    // Find the message data to show details
+                    final messageData = _messages.firstWhere(
+                      (msg) => msg['id'] == messageId,
+                      orElse: () => {},
+                    );
+                    if (messageData.isNotEmpty) {
+                      _showMessageDetailsDialog(messageData);
+                    }
                   }
                 },
               ),
@@ -1210,15 +1238,21 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             TextButton(
               child: const Text("Cancel"),
               onPressed: () {
-                Navigator.of(context).pop();
+                // Guard pop
+                if (mounted) {
+                  Navigator.of(context).pop();
+                }
               },
             ),
             TextButton(
               style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
               child: const Text("Delete"),
               onPressed: () {
-                Navigator.of(context).pop(); // Close the dialog
-                _deleteMessage(messageId); // Proceed with deletion
+                // Guard pop and delete action
+                if (mounted) {
+                  Navigator.of(context).pop(); // Close the dialog
+                  _deleteMessage(messageId); // Proceed with deletion
+                }
               },
             ),
           ],
@@ -1350,7 +1384,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             actions: [
               TextButton(
                 child: const Text("OK"),
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: () {
+                  // Guard pop
+                  if (mounted) {
+                    Navigator.of(context).pop();
+                  }
+                },
               ),
             ],
           ),
@@ -1433,7 +1472,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         context,
         initialTime,
       );
-      if (selectedTime != null) {
+      // Guard setState after await
+      if (mounted && selectedTime != null) {
         setState(() {
           _scheduledTime = selectedTime;
           _burnoutTime = null;
@@ -1451,7 +1491,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         context,
         initialTime,
       );
-      if (selectedTime != null) {
+      // Guard setState after await
+      if (mounted && selectedTime != null) {
         setState(() {
           _burnoutTime = selectedTime;
           _scheduledTime = null;
@@ -1524,10 +1565,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     .toUtc()
                     .toIso8601String(), // Mark as deleted locally
           };
-          // Update state immediately
-          setState(() {
-            _messages = updatedMessages;
-          });
+          // Update state immediately (Guarded)
+          if (mounted) {
+            setState(() {
+              _messages = updatedMessages;
+            });
+          }
           debugPrint(
             "[GroupChatScreen DELETE] Updated local UI for deleted message $messageId.",
           );
@@ -1539,28 +1582,35 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         // --- End Immediate UI Update ---
 
         // Backend emits socket event to *other* users. No need for admin to wait for it.
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Message deleted.'),
-            duration: Duration(seconds: 2),
-          ),
-        );
+        // Guard snackbar
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Message deleted.'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
       } else {
         final errorBody = jsonDecode(response.body);
         debugPrint(
           "[GroupChatScreen DELETE] API Error: ${response.statusCode} - ${errorBody['error']}",
         );
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Failed to delete message: ${errorBody['error'] ?? 'Server error'}',
+        // Guard snackbar
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Failed to delete message: ${errorBody['error'] ?? 'Server error'}',
+              ),
             ),
-          ),
-        );
+          );
+        }
       }
     } catch (e) {
       debugPrint("[GroupChatScreen DELETE] Network Error: $e");
       if (mounted) {
+        // Guard snackbar
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Network error deleting message: ${e.toString()}'),

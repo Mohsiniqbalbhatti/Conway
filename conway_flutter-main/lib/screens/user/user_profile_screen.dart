@@ -125,11 +125,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
         if (otpRequired) {
           // Navigate to OTP screen
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('OTP sent to new email. Please verify.'),
-            ),
-          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('OTP sent to new email. Please verify.'),
+              ),
+            );
+          }
           // Give snackbar time
           await Future.delayed(const Duration(milliseconds: 500));
           if (!mounted) return;
@@ -149,17 +151,19 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           ); // Consider handling result from OTP screen to refresh this one
         } else {
           // Only name was changed, update successful
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Profile updated successfully!'),
-              backgroundColor: Colors.green,
-            ),
-          );
-          // Pop back or update parent screen state
-          Navigator.pop(
-            context,
-            true,
-          ); // Pass true back to indicate changes were made
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Profile updated successfully!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+            // Pop back or update parent screen state
+            Navigator.pop(
+              context,
+              true,
+            ); // Pass true back to indicate changes were made
+          }
         }
       } else {
         // Handle backend errors (e.g., wrong password, email taken, etc.)
@@ -168,7 +172,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         });
       }
     } catch (e) {
-      print('Save Profile Changes error: $e');
+      debugPrint('Save Profile Changes error: $e');
       if (mounted) {
         setState(() {
           _errorMessage = 'Network error. Please try again.';

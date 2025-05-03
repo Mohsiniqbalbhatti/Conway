@@ -417,7 +417,7 @@ io.on("connection", (socket) => {
 // --- Scheduler Service ---
 async function checkScheduledAndExpiredMessages() {
   const now = new Date();
-  console.log(`[Scheduler] Checking jobs @ ${now.toISOString()}...`);
+  // console.log(`[Scheduler] Checking jobs @ ${now.toISOString()}...`);
   try {
     // --- Handle Scheduled Messages (Direct & Group) ---
     const scheduledMessagesToSend = await Message.find({
@@ -429,9 +429,9 @@ async function checkScheduledAndExpiredMessages() {
       "fullname email _id users participants"
     ); // Add chat to populate
 
-    console.log(
-      `[Scheduler] Found ${scheduledMessagesToSend.length} potential scheduled messages to send.`
-    );
+    // console.log(
+    //   `[Scheduler] Found ${scheduledMessagesToSend.length} potential scheduled messages to send.`
+    // );
 
     if (scheduledMessagesToSend.length > 0) {
       for (const msg of scheduledMessagesToSend) {
@@ -582,9 +582,9 @@ async function checkScheduledAndExpiredMessages() {
       deleted_at: null,
     }).populate("group"); // Populate group to get group ID for emit
 
-    console.log(
-      `[Scheduler] Found ${expiredBurnoutMessages.length} expired burnout messages to clean up.`
-    );
+    // console.log(
+    //   `[Scheduler] Found ${expiredBurnoutMessages.length} expired burnout messages to clean up.`
+    // );
 
     for (const msg of expiredBurnoutMessages) {
       msg.deleted_at = now;
@@ -639,7 +639,7 @@ async function checkScheduledAndExpiredMessages() {
       }
     }
 
-    console.log(`[Scheduler] Job run completed.`);
+    // console.log(`[Scheduler] Job run completed.`);
   } catch (err) {
     console.error("[Scheduler] Error in scheduled job:", err);
   }

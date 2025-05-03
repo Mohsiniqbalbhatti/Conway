@@ -43,11 +43,13 @@ class _LoginScreenState extends State<LoginScreen> {
     final password = _passwordController.text;
 
     if (emailOrUsername.isEmpty || password.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Please enter both email/username and password"),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Please enter both email/username and password"),
+          ),
+        );
+      }
       setState(() => _isLoading = false);
       return;
     }
@@ -87,35 +89,49 @@ class _LoginScreenState extends State<LoginScreen> {
         await DBHelper().insertUser(userFromServer);
 
         // *** Connect Socket ***
-        print(
+        debugPrint(
           "[LoginScreen] Connecting socket after regular login for user: ${userFromServer.id}",
         );
         _socketService.connect(userFromServer.id);
         // ********************
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Login successful!"),
-            backgroundColor: Colors.green,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        widget.onLogin(userFromServer);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Login successful!"),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
 
         await Future.delayed(const Duration(milliseconds: 1500));
 
-        widget.onLogin(userFromServer);
-        Navigator.pushReplacementNamed(context, '/home');
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/home');
+        }
       } else {
         final Map<String, dynamic> errorData = jsonDecode(response.body);
         final String errorMessage =
             errorData['message'] ?? 'Login failed. Check your credentials.';
 
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(errorMessage)));
+        if (errorData['message'] == 'User not found or credentials incorrect') {
+          debugPrint(
+            "Handling 'User not found or credentials incorrect' error...",
+          );
+          // Handle user not found/wrong password specifically
+        }
+
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(errorMessage)));
+        }
       }
     } catch (e) {
-      print('Login error details: $e');
+      debugPrint('Login error details: $e');
 
       String errorMessage = "Network error occurred. Please try again.";
 
@@ -130,9 +146,11 @@ class _LoginScreenState extends State<LoginScreen> {
         errorMessage = 'Invalid response from server. Please try again.';
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(errorMessage)));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(errorMessage)));
+      }
     } finally {
       setState(() => _isLoading = false);
     }
@@ -197,7 +215,7 @@ class _LoginScreenState extends State<LoginScreen> {
           await DBHelper().insertUser(user);
 
           // *** Connect Socket ***
-          print(
+          debugPrint(
             "[LoginScreen] Connecting socket after Google sign-in for user: ${user.id}",
           );
           _socketService.connect(user.id);
@@ -212,17 +230,21 @@ class _LoginScreenState extends State<LoginScreen> {
                   ? "Logged in to your existing account"
                   : "Google login successful!";
 
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(message),
-              backgroundColor: Colors.green,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(message),
+                backgroundColor: Colors.green,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
 
           await Future.delayed(const Duration(milliseconds: 1500));
 
-          Navigator.pushReplacementNamed(context, '/home');
+          if (mounted) {
+            Navigator.pushReplacementNamed(context, '/home');
+          }
         } else {
           throw Exception(
             "Server returned ${response.statusCode}: ${response.body}",
@@ -230,7 +252,7 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       }
     } catch (e) {
-      print('Google sign-in error details: $e');
+      debugPrint('Google sign-in error details: $e');
 
       String errorMessage = "Google sign in failed. Please try again.";
 
@@ -245,9 +267,11 @@ class _LoginScreenState extends State<LoginScreen> {
         errorMessage = 'Invalid response from server. Please try again.';
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(errorMessage)));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(errorMessage)));
+      }
     } finally {
       setState(() => _isLoading = false);
     }
@@ -427,7 +451,7 @@ class _LoginScreenState extends State<LoginScreen> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: _primaryColor.withOpacity(0.2),
+            color: _primaryColor.withAlpha(51),
             blurRadius: 8,
             offset: const Offset(0, 4),
           ),

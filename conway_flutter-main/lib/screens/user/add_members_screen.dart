@@ -17,10 +17,10 @@ class AddMembersScreen extends StatefulWidget {
   });
 
   @override
-  _AddMembersScreenState createState() => _AddMembersScreenState();
+  AddMembersScreenState createState() => AddMembersScreenState();
 }
 
-class _AddMembersScreenState extends State<AddMembersScreen> {
+class AddMembersScreenState extends State<AddMembersScreen> {
   final TextEditingController _searchController = TextEditingController();
   List<Map<String, dynamic>> _searchResults = [];
   final Set<Map<String, dynamic>> _selectedUsers =

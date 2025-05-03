@@ -9,10 +9,10 @@ class CreateGroupScreen extends StatefulWidget {
   const CreateGroupScreen({super.key});
 
   @override
-  _CreateGroupScreenState createState() => _CreateGroupScreenState();
+  CreateGroupScreenState createState() => CreateGroupScreenState();
 }
 
-class _CreateGroupScreenState extends State<CreateGroupScreen> {
+class CreateGroupScreenState extends State<CreateGroupScreen> {
   final TextEditingController _createGroupController = TextEditingController();
   final TextEditingController _searchGroupController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
@@ -73,7 +73,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       }
     } catch (e) {
       // Handle error
-      print('Error loading suggested groups: $e');
+      debugPrint('Error loading suggested groups: $e');
     } finally {
       setState(() {
         _isLoading = false;
@@ -101,20 +101,29 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       );
 
       if (response.statusCode == 200) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Group created successfully!')));
-        _createGroupController.clear();
-        Navigator.pop(context, true); // Return true to refresh the groups list
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Group created successfully!')),
+          );
+          _createGroupController.clear();
+          Navigator.pop(
+            context,
+            true,
+          ); // Return true to refresh the groups list
+        }
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to create group')));
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Failed to create group')));
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     } finally {
       setState(() {
         _isLoading = false;
@@ -143,7 +152,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         });
       }
     } catch (e) {
-      print('Error searching groups: $e');
+      debugPrint('Error searching groups: $e');
     } finally {
       setState(() {
         _isLoading = false;
@@ -165,19 +174,28 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       );
 
       if (response.statusCode == 200) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Joined group successfully!')));
-        Navigator.pop(context, true); // Return true to refresh the groups list
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Joined group successfully!')));
+          Navigator.pop(
+            context,
+            true,
+          ); // Return true to refresh the groups list
+        }
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to join group')));
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Failed to join group')));
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     }
   }
 

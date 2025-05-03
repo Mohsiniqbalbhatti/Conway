@@ -107,6 +107,7 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
         });
       } else if (mounted) {
         // Handle errors (e.g., show a snackbar)
+        // Added mounted check
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Search failed: ${response.statusCode}')),
         );
@@ -114,6 +115,7 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
     } catch (e) {
       debugPrint('Error searching users: $e');
       if (mounted) {
+        // Added mounted check
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Network error during search: ${e.toString()}'),
@@ -130,7 +132,7 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
     }
   }
 
-  void _startChat(Map<String, dynamic> user) {
+  Future<void> _startChat(Map<String, dynamic> user) async {
     // Check if required fields exist before navigating
     final String? userName = user['fullname'];
     final String? userEmail = user['email'];
@@ -147,7 +149,8 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
     }
 
     final index = _searchedUsers.indexOf(user);
-    Navigator.push(
+    // Use await here to ensure the context check happens after pop
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder:
@@ -159,9 +162,15 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
               profileUrl: profileUrl, // Pass profile URL to ChatScreen
             ),
       ),
-    ).then(
-      (_) => Navigator.pop(context, true),
-    ); // Return true to refresh the chat list
+    ); // Wait for ChatScreen to pop
+
+    // Check if mounted *after* the ChatScreen is popped
+    if (mounted) {
+      Navigator.pop(
+        context,
+        true,
+      ); // Return true to refresh the chat list in HomeScreen
+    }
   }
 
   @override

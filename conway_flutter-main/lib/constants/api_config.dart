@@ -16,4 +16,6 @@ class ApiConfig {
       '$baseUrl/api/user/verify-email-change';
   // Add endpoint for password change
   static const String changePassword = '$baseUrl/api/user/change-password';
+  // Add endpoint for user search
+  static const String searchUser = '$baseUrl/api/search-user';
 }

@@ -1,4 +1,5 @@
 // database_helper.dart
+import 'package:flutter/foundation.dart'; // Import for debugPrint
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/user.dart' as conway_user;
@@ -43,7 +44,7 @@ class DBHelper {
       user.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace, // Replace if user_id exists
     );
-    print(
+    debugPrint(
       "[DBHelper insertUser] User inserted/replaced: ${user.email}, Fullname: ${user.fullname}",
     );
   }
@@ -57,10 +58,10 @@ class DBHelper {
     );
 
     if (maps.isNotEmpty) {
-      print("User retrieved from local DB: ${maps.first['user_id']}");
+      debugPrint("User retrieved from local DB: ${maps.first['user_id']}");
       return conway_user.User.fromMap(maps.first);
     } else {
-      print("No user found in local DB.");
+      debugPrint("No user found in local DB.");
       return null;
     }
   }
@@ -79,13 +80,13 @@ class DBHelper {
     if (profileUrl != null) dataToUpdate['profileUrl'] = profileUrl;
 
     if (dataToUpdate.isEmpty) {
-      print(
+      debugPrint(
         "[DBHelper updateUserDetails] No details provided to update for userId: $userId",
       );
       return 0; // No changes made
     }
 
-    print(
+    debugPrint(
       "[DBHelper updateUserDetails] Updating userId: $userId with data: $dataToUpdate",
     );
     return await db.update(
@@ -100,6 +101,6 @@ class DBHelper {
   Future<void> deleteUser() async {
     final db = await database;
     await db.delete(_userTable);
-    print("User data deleted from local DB.");
+    debugPrint("User data deleted from local DB.");
   }
 }

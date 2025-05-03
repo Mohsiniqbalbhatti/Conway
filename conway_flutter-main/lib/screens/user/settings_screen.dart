@@ -1,7 +1,6 @@
 import 'dart:io'; // For File
 import 'dart:convert'; // For jsonDecode
 import 'package:flutter/material.dart';
-import 'package:conway/helpers/auth_guard.dart';
 import 'package:conway/helpers/database_helper.dart';
 import '../../services/socket_service.dart';
 import 'package:image_picker/image_picker.dart'; // Import image_picker
@@ -182,12 +181,15 @@ class SettingScreenState extends State<SettingScreen> {
                 null; // Clear selection after successful upload
           });
 
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Profile picture updated!'),
-              backgroundColor: Colors.green,
-            ),
-          );
+          // Check mounted before showing snackbar
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Profile picture updated!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
           // Optionally: Could return `true` when popping if the parent needs to know
         } else {
           throw Exception('Upload successful but no profile URL returned.');
@@ -246,12 +248,15 @@ class SettingScreenState extends State<SettingScreen> {
       if (!mounted) return;
 
       if (response.statusCode == 200 && responseData['success'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Password changed successfully!'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        // Check mounted before showing snackbar
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Password changed successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
         // Clear password fields after success
         _currentPasswordController.clear();
         _newPasswordController.clear();
@@ -272,7 +277,7 @@ class SettingScreenState extends State<SettingScreen> {
         );
       }
     } catch (e) {
-      print('Change Password error: $e');
+      debugPrint('Change Password error: $e');
       if (mounted) {
         setState(() {
           _changePasswordError = 'Network error. Please try again.';
@@ -295,9 +300,11 @@ class SettingScreenState extends State<SettingScreen> {
       //   throw Exception('No user found to logout');
       // }
 
-      // Disconnect Socket FIRST
-      print("[SettingScreen] Disconnecting socket before logout.");
-      _socketService.disconnect();
+      // 1. Disconnect Socket (if connected)
+      if (_socketService.isConnected) {
+        debugPrint("[SettingScreen] Disconnecting socket before logout.");
+        _socketService.disconnect(); // Corrected: no arguments needed
+      }
 
       // Send logout request to backend with error handling
       try {
@@ -311,16 +318,16 @@ class SettingScreenState extends State<SettingScreen> {
         );
 
         if (response.statusCode != 200) {
-          print(
+          debugPrint(
             "Backend logout returned: ${response.statusCode} ${response.body}",
           );
           // Continue with logout even if the backend request fails
         } else {
-          print("Backend logout successful");
+          debugPrint("Backend logout successful");
         }
       } catch (e) {
         // Just log the error and continue with local logout
-        print("Error calling logout endpoint: $e");
+        debugPrint("Error calling logout endpoint: $e");
       }
 
       // Clear user data from the database
@@ -342,7 +349,8 @@ class SettingScreenState extends State<SettingScreen> {
         Navigator.of(context).popUntil((route) => route.isFirst);
       }
     } catch (e) {
-      print("Logout error: $e");
+      // Error during DB deletion or socket disconnection
+      debugPrint("Logout error: $e");
       if (mounted) {
         // Add mounted check before showing SnackBar
         ScaffoldMessenger.of(context).showSnackBar(
@@ -413,7 +421,7 @@ class SettingScreenState extends State<SettingScreen> {
                       backgroundColor: Colors.grey.shade300,
                       backgroundImage:
                           hasProfileUrl
-                              ? CachedNetworkImageProvider(profileUrl!)
+                              ? CachedNetworkImageProvider(profileUrl)
                               : null,
                       child:
                           !hasProfileUrl
@@ -554,10 +562,12 @@ class SettingScreenState extends State<SettingScreen> {
                           () => _obscureNewPassword = !_obscureNewPassword,
                         ),
                     validator: (value) {
-                      if (value == null || value.isEmpty)
+                      if (value == null || value.isEmpty) {
                         return 'New password cannot be empty.';
-                      if (value.length < 8)
+                      }
+                      if (value.length < 8) {
                         return 'Password must be at least 8 characters.';
+                      }
                       // Add more complex validation if needed
                       return null;
                     },
@@ -577,8 +587,9 @@ class SettingScreenState extends State<SettingScreen> {
                       if (value == null || value.isEmpty) {
                         return 'Please confirm your new password.';
                       }
-                      if (value != _newPasswordController.text)
+                      if (value != _newPasswordController.text) {
                         return 'Passwords do not match.';
+                      }
                       return null;
                     },
                   ),
@@ -654,7 +665,7 @@ class SettingScreenState extends State<SettingScreen> {
                   ),
                   style: OutlinedButton.styleFrom(
                     side: BorderSide(
-                      color: destructiveColor.withOpacity(0.5),
+                      color: destructiveColor.withAlpha(128),
                     ), // Border color
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -663,8 +674,8 @@ class SettingScreenState extends State<SettingScreen> {
                       horizontal: 30,
                       vertical: 12,
                     ),
-                    foregroundColor: destructiveColor.withOpacity(
-                      0.1,
+                    foregroundColor: destructiveColor.withAlpha(
+                      26,
                     ), // Splash color
                   ),
                   onPressed: () => _showLogoutConfirmationDialog(context),

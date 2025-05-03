@@ -6,8 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:pinput/pinput.dart';
 import 'package:conway/helpers/database_helper.dart'; // To update local user
-import 'package:conway/constants/colors.dart';
 import 'package:conway/constants/api_config.dart';
+
 // import 'package:conway/widgets/custom_button.dart'; // Remove unused import
 
 // Define colors here if not importing from constants/colors.dart
@@ -83,7 +83,7 @@ class _VerifyEmailChangeScreenState extends State<VerifyEmailChangeScreen> {
       if (!mounted) return;
 
       if (response.statusCode == 200 && responseData['success'] == true) {
-        final Map<String, dynamic>? updatedUserJson = responseData['user'];
+        // final Map<String, dynamic>? updatedUserJson = responseData['user']; // Unused
 
         // Update local database with confirmed new details
         await DBHelper().updateUserDetails(
@@ -96,13 +96,15 @@ class _VerifyEmailChangeScreenState extends State<VerifyEmailChangeScreen> {
           // profileUrl: keep existing or update if backend returns it
         );
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Email address updated successfully!'),
-            backgroundColor: Colors.green,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Email address updated successfully!'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
         await Future.delayed(const Duration(milliseconds: 1500));
         if (mounted) {
           // Pop back potentially two screens (OTP -> Profile -> Settings)
@@ -119,7 +121,7 @@ class _VerifyEmailChangeScreenState extends State<VerifyEmailChangeScreen> {
         });
       }
     } catch (e) {
-      print('Verify Email Change OTP error: $e');
+      debugPrint('Verify Email Change OTP error: $e');
       if (mounted) {
         setState(() {
           _errorMessage =

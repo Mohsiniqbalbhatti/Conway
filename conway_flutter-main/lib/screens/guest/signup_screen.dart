@@ -58,38 +58,43 @@ class _SignupScreenState extends State<SignupScreen> {
 
     try {
       // Make sure to use the correct IP address that your device can reach
-      final response = await http.post(
-        Uri.parse(ApiConfig.requestOtp),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'fullname': _fullnameController.text.trim(),
-          'username': _usernameController.text.trim(),
-          'email': _emailController.text.trim(),
-          'password': _passwordController.text,
-        }),
-      ).timeout(
-        const Duration(seconds: 15),
-        onTimeout: () {
-          throw TimeoutException('Connection timed out. Server might be unreachable.');
-        },
-      );
+      final response = await http
+          .post(
+            Uri.parse(ApiConfig.requestOtp),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'fullname': _fullnameController.text.trim(),
+              'username': _usernameController.text.trim(),
+              'email': _emailController.text.trim(),
+              'password': _passwordController.text,
+            }),
+          )
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () {
+              throw TimeoutException(
+                'Connection timed out. Server might be unreachable.',
+              );
+            },
+          );
 
       final responseData = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
         // Navigate to OTP verification screen
         if (!mounted) return;
-        
+
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => OtpVerificationScreen(
-              email: _emailController.text.trim(),
-              onVerificationComplete: () {
-                // Remove the popUntil call, just toggle the view
-                widget.toggleView(); // Switch to login view
-              },
-            ),
+            builder:
+                (context) => OtpVerificationScreen(
+                  email: _emailController.text.trim(),
+                  onVerificationComplete: () {
+                    // Remove the popUntil call, just toggle the view
+                    widget.toggleView(); // Switch to login view
+                  },
+                ),
           ),
         );
       } else {
@@ -98,20 +103,21 @@ class _SignupScreenState extends State<SignupScreen> {
         });
       }
     } catch (e) {
-      print('Network error details: $e');
-      
+      debugPrint('Network error details: $e');
+
       String errorMessage = 'Network error. Please try again later.';
-      
-      if (e.toString().contains('SocketException') || 
+
+      if (e.toString().contains('SocketException') ||
           e.toString().contains('Connection refused') ||
           e.toString().contains('Network is unreachable')) {
-        errorMessage = 'Cannot connect to server. Check your network connection and server address.';
+        errorMessage =
+            'Cannot connect to server. Check your network connection and server address.';
       } else if (e.toString().contains('timed out')) {
         errorMessage = 'Connection timed out. Server might be unreachable.';
       } else if (e is FormatException) {
         errorMessage = 'Invalid response from server. Please try again.';
       }
-      
+
       setState(() {
         _errorMessage = errorMessage;
       });
@@ -137,10 +143,7 @@ class _SignupScreenState extends State<SignupScreen> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   const SizedBox(height: 50),
-                  Image.asset(
-                    'assets/logo.png', 
-                    height: 50,
-                  ),
+                  Image.asset('assets/logo.png', height: 50),
                   const SizedBox(height: 40),
                   const Text(
                     'Create Account',
@@ -154,17 +157,17 @@ class _SignupScreenState extends State<SignupScreen> {
                   const SizedBox(height: 8),
                   const Text(
                     'Join Conway to start chatting',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey,
-                    ),
+                    style: TextStyle(fontSize: 16, color: Colors.grey),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 40),
                   CustomTextField(
                     controller: _fullnameController,
                     hintText: 'Full Name',
-                    prefixIcon: Icon(Icons.person_outline, color: AppColors.primaryColor.withOpacity(0.7)),
+                    prefixIcon: Icon(
+                      Icons.person_outline,
+                      color: AppColors.primaryColor.withAlpha(179),
+                    ),
                     validator: Validator.validateFullName,
                     textInputAction: TextInputAction.next,
                   ),
@@ -172,7 +175,10 @@ class _SignupScreenState extends State<SignupScreen> {
                   CustomTextField(
                     controller: _usernameController,
                     hintText: 'Username',
-                    prefixIcon: Icon(Icons.account_circle_outlined, color: AppColors.primaryColor.withOpacity(0.7)),
+                    prefixIcon: Icon(
+                      Icons.account_circle_outlined,
+                      color: AppColors.primaryColor.withAlpha(179),
+                    ),
                     validator: Validator.validateUsername,
                     textInputAction: TextInputAction.next,
                   ),
@@ -180,7 +186,10 @@ class _SignupScreenState extends State<SignupScreen> {
                   CustomTextField(
                     controller: _emailController,
                     hintText: 'Email',
-                    prefixIcon: Icon(Icons.email_outlined, color: AppColors.primaryColor.withOpacity(0.7)),
+                    prefixIcon: Icon(
+                      Icons.email_outlined,
+                      color: AppColors.primaryColor.withAlpha(179),
+                    ),
                     validator: Validator.validateEmail,
                     keyboardType: TextInputType.emailAddress,
                     textInputAction: TextInputAction.next,
@@ -189,7 +198,10 @@ class _SignupScreenState extends State<SignupScreen> {
                   CustomTextField(
                     controller: _passwordController,
                     hintText: 'Password',
-                    prefixIcon: Icon(Icons.lock_outline, color: AppColors.primaryColor.withOpacity(0.7)),
+                    prefixIcon: Icon(
+                      Icons.lock_outline,
+                      color: AppColors.primaryColor.withAlpha(179),
+                    ),
                     isPassword: true,
                     validator: Validator.validatePassword,
                     textInputAction: TextInputAction.next,
@@ -198,9 +210,16 @@ class _SignupScreenState extends State<SignupScreen> {
                   CustomTextField(
                     controller: _confirmPasswordController,
                     hintText: 'Confirm Password',
-                    prefixIcon: Icon(Icons.lock_outline, color: AppColors.primaryColor.withOpacity(0.7)),
+                    prefixIcon: Icon(
+                      Icons.lock_outline,
+                      color: AppColors.primaryColor.withAlpha(179),
+                    ),
                     isPassword: true,
-                    validator: (value) => Validator.validateConfirmPassword(value, _passwordController.text),
+                    validator:
+                        (value) => Validator.validateConfirmPassword(
+                          value,
+                          _passwordController.text,
+                        ),
                     textInputAction: TextInputAction.done,
                   ),
                   if (_errorMessage.isNotEmpty)

@@ -78,6 +78,7 @@ class ChatScreenState extends State<ChatScreen> {
       await _fetchMessages();
     } else {
       setState(() => _isLoading = false);
+      // Guard the ScaffoldMessenger call
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Error: Could not load user data.')),
@@ -711,7 +712,7 @@ class ChatScreenState extends State<ChatScreen> {
     final String time = _formatTime(messageData['time']);
     final bool isMe = messageData['isMe'] ?? false;
     final bool isBurnout = messageData['isBurnout'] ?? false;
-    final String? expireAtStr = messageData['expireAt'];
+    // final String? expireAtStr = messageData['expireAt']; // Unused
     final bool isScheduled = messageData['isScheduled'] ?? false;
     final String? scheduledAtStr = messageData['scheduledAt'];
     final bool isOptimistic = messageData['isOptimistic'] ?? false;
@@ -945,7 +946,11 @@ class ChatScreenState extends State<ChatScreen> {
             actions: [
               TextButton(
                 child: Text("OK"),
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: () {
+                  if (mounted) {
+                    Navigator.of(context).pop();
+                  }
+                },
               ),
             ],
           ),
@@ -1003,7 +1008,8 @@ class ChatScreenState extends State<ChatScreen> {
         initialTime,
       );
 
-      if (selectedTime != null) {
+      // Guard setState after await
+      if (mounted && selectedTime != null) {
         setState(() {
           _scheduledTime = selectedTime;
           _burnoutTime = null;
@@ -1024,7 +1030,8 @@ class ChatScreenState extends State<ChatScreen> {
         initialTime,
       );
 
-      if (selectedTime != null) {
+      // Guard setState after await
+      if (mounted && selectedTime != null) {
         setState(() {
           _burnoutTime = selectedTime;
           _scheduledTime = null;

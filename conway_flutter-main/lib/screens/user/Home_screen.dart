@@ -84,7 +84,14 @@ class HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _loadUserData() async {
-    await AuthGuard.isAuthenticated(context);
+    if (!mounted) return;
+    // Check mounted immediately before using context after potential async gap
+    if (mounted) {
+      await AuthGuard.isAuthenticated(context);
+    } else {
+      return;
+    }
+    // Keep check after DB call, before setState
     final user = await DBHelper().getUser();
     if (mounted) {
       setState(() {
@@ -282,7 +289,9 @@ class HomeScreenState extends State<HomeScreen>
   }
 
   String _formatTime(String? timeString) {
-    if (timeString == null) return '';
+    if (timeString == null) {
+      return '';
+    }
     try {
       final DateTime utcTime = DateTime.parse(timeString);
       final DateTime localTime = utcTime.toLocal();
@@ -294,8 +303,9 @@ class HomeScreenState extends State<HomeScreen>
         final String period = hour < 12 ? 'AM' : 'PM';
         if (hour == 0) {
           hour = 12;
-        } else if (hour > 12)
+        } else if (hour > 12) {
           hour -= 12;
+        }
         return '$hour:$minute $period';
       } else if (difference.inDays == 1 ||
           (difference.inDays == 0 && localTime.day == now.day - 1)) {
@@ -319,10 +329,16 @@ class HomeScreenState extends State<HomeScreen>
       try {
         DateTime? timeA = rawTimeA != null ? DateTime.parse(rawTimeA) : null;
         DateTime? timeB = rawTimeB != null ? DateTime.parse(rawTimeB) : null;
-        if (timeA == null && timeB == null) return 0;
-        if (timeA == null) return 1;
-        if (timeB == null) return -1;
-        return timeB.compareTo(timeA);
+        if (timeA == null && timeB == null) {
+          return 0;
+        }
+        if (timeA == null) {
+          return 1; // Treat nulls as older
+        }
+        if (timeB == null) {
+          return -1; // Treat nulls as older
+        }
+        return timeB.compareTo(timeA); // Sort descending (newest first)
       } catch (e) {
         debugPrint("Error parsing time during sort: $e");
         return 0;
@@ -419,9 +435,10 @@ class HomeScreenState extends State<HomeScreen>
                       : null,
             ),
             onPressed: () async {
+              // Fetch user fresh before navigating
               final user = await DBHelper().getUser();
-
-              if (user != null && context.mounted) {
+              // Check mounted AFTER await and before using context
+              if (user != null && mounted) {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -530,18 +547,21 @@ class HomeScreenState extends State<HomeScreen>
                     style: TextStyle(color: Colors.grey[600], fontSize: 12),
                   ),
                   onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder:
-                            (_) => ChatScreen(
-                              userName: chat['name'] ?? 'Unknown',
-                              userIndex: index,
-                              userEmail: chat['email'],
-                              profileUrl: profileUrl,
-                            ),
-                      ),
-                    ).then((_) => _fetchData());
+                    // Check mounted before using context
+                    if (mounted) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder:
+                              (_) => ChatScreen(
+                                userName: chat['name'] ?? 'Unknown',
+                                userIndex: index,
+                                userEmail: chat['email'],
+                                profileUrl: profileUrl,
+                              ),
+                        ),
+                      ).then((_) => _fetchData());
+                    }
                   },
                 );
               },
@@ -654,18 +674,21 @@ class HomeScreenState extends State<HomeScreen>
                     style: TextStyle(color: Colors.grey[600], fontSize: 12),
                   ),
                   onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder:
-                            (_) => GroupChatScreen(
-                              groupName: group['name'] ?? 'Unknown',
-                              members: group['members'] ?? '',
-                              groupIndex: index,
-                              groupId: group['id'],
-                            ),
-                      ),
-                    ).then((_) => _fetchData());
+                    // Check mounted before using context
+                    if (mounted) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder:
+                              (_) => GroupChatScreen(
+                                groupName: group['name'] ?? 'Unknown',
+                                members: group['members'] ?? '',
+                                groupIndex: index,
+                                groupId: group['id'],
+                              ),
+                        ),
+                      ).then((_) => _fetchData());
+                    }
                   },
                 );
               },
@@ -676,14 +699,17 @@ class HomeScreenState extends State<HomeScreen>
           child: FloatingActionButton(
             heroTag: 'fab_group',
             onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
-              ).then((refreshNeeded) {
-                if (refreshNeeded == true) {
-                  _fetchData();
-                }
-              });
+              // Check mounted before using context
+              if (mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
+                ).then((refreshNeeded) {
+                  if (refreshNeeded == true) {
+                    _fetchData();
+                  }
+                });
+              }
             },
             backgroundColor: _primaryColor,
             child: const Icon(Icons.add, color: Colors.white),
@@ -698,7 +724,7 @@ class HomeScreenState extends State<HomeScreen>
       decoration: BoxDecoration(
         boxShadow: [
           BoxShadow(
-            color: Colors.grey.withOpacity(0.2),
+            color: Colors.grey.withAlpha(51),
             blurRadius: 10,
             spreadRadius: 2,
           ),
@@ -726,7 +752,7 @@ class HomeScreenState extends State<HomeScreen>
                   shape: BoxShape.circle,
                   color:
                       _currentIndex == 0
-                          ? _primaryColor.withOpacity(0.2)
+                          ? _primaryColor.withAlpha(51)
                           : Colors.transparent,
                 ),
                 child: const Icon(Icons.chat_bubble_outline),
@@ -741,7 +767,7 @@ class HomeScreenState extends State<HomeScreen>
                   shape: BoxShape.circle,
                   color:
                       _currentIndex == 1
-                          ? _primaryColor.withOpacity(0.2)
+                          ? _primaryColor.withAlpha(51)
                           : Colors.transparent,
                 ),
                 child: const Icon(Icons.group_outlined),

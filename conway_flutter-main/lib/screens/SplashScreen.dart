@@ -2,15 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:animated_text_kit/animated_text_kit.dart';
 import '../helpers/database_helper.dart';
 
-
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
-  
+
   @override
-  _SplashScreenState createState() => _SplashScreenState();
+  SplashScreenState createState() => SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen>
+class SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _opacityAnimation;
@@ -31,12 +30,13 @@ class _SplashScreenState extends State<SplashScreen>
     );
 
     _opacityAnimation = Tween<double>(begin: 0, end: 1).animate(
-        CurvedAnimation(
-          parent: _controller,
-          curve: const Interval(0, 0.5, curve: Curves.easeOut),)
-        );
+      CurvedAnimation(
+        parent: _controller,
+        curve: const Interval(0, 0.5, curve: Curves.easeOut),
+      ),
+    );
 
-        _controller.forward().whenComplete(() {
+    _controller.forward().whenComplete(() {
       Navigator.pushReplacementNamed(context, '/auth');
     });
   }
@@ -93,11 +93,14 @@ class _SplashScreenState extends State<SplashScreen>
                                 fontSize: 42,
                                 fontWeight: FontWeight.w700,
                                 fontFamily: 'Poppins',
-                                foreground: Paint()
-                                  ..shader = LinearGradient(
-                                    colors: [_primaryTeal, _secondaryGreen],
-                                    stops: const [0.3, 0.7],
-                                  ).createShader(const Rect.fromLTWH(0, 0, 200, 70)),
+                                foreground:
+                                    Paint()
+                                      ..shader = LinearGradient(
+                                        colors: [_primaryTeal, _secondaryGreen],
+                                        stops: const [0.3, 0.7],
+                                      ).createShader(
+                                        const Rect.fromLTWH(0, 0, 200, 70),
+                                      ),
                                 shadows: [
                                   BoxShadow(
                                     color: _primaryTeal.withAlpha(51),
@@ -117,7 +120,11 @@ class _SplashScreenState extends State<SplashScreen>
                         scale: Tween(begin: 0.8, end: 1.2).animate(
                           CurvedAnimation(
                             parent: _controller,
-                            curve: const Interval(0.5, 1, curve: Curves.easeInOut),
+                            curve: const Interval(
+                              0.5,
+                              1,
+                              curve: Curves.easeInOut,
+                            ),
                           ),
                         ),
                         child: Container(
@@ -183,8 +190,6 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(child: Text('Home Screen')),
-    );
+    return Scaffold(body: Center(child: Text('Home Screen')));
   }
 }

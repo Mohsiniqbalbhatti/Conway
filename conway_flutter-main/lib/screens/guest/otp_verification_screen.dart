@@ -97,13 +97,15 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         // Show success toast
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Account created successfully!'),
-            backgroundColor: Colors.green,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Account created successfully!'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
 
         // Allow time for the toast to be visible before navigating away
         await Future.delayed(const Duration(milliseconds: 1500));
@@ -117,7 +119,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
         });
       }
     } catch (e) {
-      print('OTP verification error details: $e');
+      debugPrint('OTP verification error details: $e');
 
       String errorMessage = 'Network error. Please try again later.';
 
@@ -181,20 +183,22 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
         });
 
         // Show success toast
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('New OTP sent to your email'),
-            backgroundColor: Colors.green,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('New OTP sent to your email'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       } else {
         setState(() {
           _errorMessage = responseData['message'] ?? 'Failed to resend OTP';
         });
       }
     } catch (e) {
-      print('Resend OTP error details: $e');
+      debugPrint('Resend OTP error details: $e');
 
       String errorMessage = 'Network error. Please try again later.';
 
