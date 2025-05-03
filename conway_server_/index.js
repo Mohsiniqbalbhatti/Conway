@@ -483,7 +483,10 @@ io.on("connection", (socket) => {
           console.log(
             `[Socket DELETE] Emitting messageDeleted to member ${memberIdStr} (Socket: ${memberSocketId}) for msg ${messageId}`
           );
-          io.to(memberSocketId).emit("messageDeleted", deletionUpdatePayload);
+          io.to(memberSocketId).emit(
+            "groupMessageDeleted",
+            deletionUpdatePayload
+          );
         } else {
           console.log(
             `[Socket DELETE] Member ${memberIdStr} for group ${groupId} is OFFLINE.`

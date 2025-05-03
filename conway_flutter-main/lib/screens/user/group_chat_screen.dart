@@ -1187,12 +1187,14 @@ class GroupChatScreenState extends State<GroupChatScreen> {
                 children: [
                   Icon(Icons.delete_outline, size: 16, color: Colors.grey[600]),
                   const SizedBox(width: 8),
-                  Text(
-                    deletedText, // Use the determined text
-                    style: TextStyle(
-                      color: Colors.grey[600],
-                      fontStyle: FontStyle.italic,
-                      fontSize: 14,
+                  Flexible(
+                    child: Text(
+                      deletedText, // Use the determined text
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontStyle: FontStyle.italic,
+                        fontSize: 14,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
