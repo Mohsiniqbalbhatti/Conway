@@ -62,22 +62,23 @@ router.post(
       return res.status(400).json({ message: "No image file uploaded." });
     }
 
-    const { userEmail } = req.body; // Get user identifier from request body
+    const { userId } = req.body; // <<< CHANGE: Expect userId instead of userEmail
 
-    if (!userEmail) {
-      console.log("[POST /user/profile-picture] User email missing from body.");
-      return res.status(400).json({ message: "User email is required." });
+    if (!userId) {
+      // <<< CHANGE: Check for userId
+      console.log("[POST /user/profile-picture] User ID missing from body."); // <<< CHANGE: Log message
+      return res.status(400).json({ message: "User ID is required." }); // <<< CHANGE: Error message
     }
 
     console.log(
-      `[POST /user/profile-picture] Attempting update for email: ${userEmail}`
+      `[POST /user/profile-picture] Attempting update for userId: ${userId}` // <<< CHANGE: Log message
     );
 
     try {
-      const user = await User.findOne({ email: userEmail });
+      const user = await User.findById(userId); // <<< CHANGE: Find by ID
       if (!user) {
         console.log(
-          `[POST /user/profile-picture] User not found for email: ${userEmail}`
+          `[POST /user/profile-picture] User not found for ID: ${userId}` // <<< CHANGE: Log message
         );
         return res.status(404).json({ message: "User not found." });
       }
@@ -94,6 +95,7 @@ router.post(
           public_id: user._id.toString(), // Use user ID as public ID (overwrites previous)
           overwrite: true,
           resource_type: "image",
+          timeout: 60000, // Add timeout: 60 seconds (60000 ms)
           // transformation: [ // Optional: Apply transformations (e.g., resize, crop)
           //   { width: 200, height: 200, gravity: "face", crop: "thumb" }
           // ]
@@ -130,7 +132,7 @@ router.post(
           await user.save();
 
           console.log(
-            `[POST /user/profile-picture] User profile URL updated in DB for ${userEmail}.`
+            `[POST /user/profile-picture] User profile URL updated in DB for ${userId}.` // <<< CHANGE: Log message
           );
 
           res.status(200).json({
@@ -344,12 +346,10 @@ router.post("/verify-email-change", async (req, res) => {
       "[POST /user/verify-email-change] Server error:",
       error.message
     );
-    res
-      .status(500)
-      .json({
-        error: "Server error verifying email change.",
-        details: error.message,
-      });
+    res.status(500).json({
+      error: "Server error verifying email change.",
+      details: error.message,
+    });
   }
 });
 

@@ -61,7 +61,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
       if (user == null) return;
 
       final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/suggested-groups?email=${user.email}'),
+        Uri.parse('${ApiConfig.baseUrl}/api/suggested-groups?email=${user.email}'),
         headers: {'Content-Type': 'application/json'},
       );
 
@@ -92,7 +92,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/groups'),
+        Uri.parse('${ApiConfig.baseUrl}/api/groups'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'groupName': _createGroupController.text.trim(),
@@ -140,7 +140,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/search-group'),
+        Uri.parse('${ApiConfig.baseUrl}/api/search-group'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'groupName': _searchGroupController.text.trim()}),
       );
@@ -165,7 +165,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/addInGroup'),
+        Uri.parse('${ApiConfig.baseUrl}/api/addInGroup'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'userEmail': _currentUser!.email,

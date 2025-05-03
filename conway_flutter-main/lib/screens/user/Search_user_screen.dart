@@ -88,7 +88,7 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
       // **Verify this endpoint exists and returns profileUrl**
       final response = await http
           .post(
-            Uri.parse('${ApiConfig.baseUrl}/search-user'),
+            Uri.parse('${ApiConfig.baseUrl}/api/search-user'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'useremail': _currentUser!.email,

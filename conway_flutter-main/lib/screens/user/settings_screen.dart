@@ -116,14 +116,12 @@ class SettingScreenState extends State<SettingScreen> {
       // Create multipart request
       final request = http.MultipartRequest(
         'POST',
-        Uri.parse(
-          '${ApiConfig.baseUrl}/user/profile-picture',
-        ), // Use correct endpoint
+        Uri.parse(ApiConfig.uploadProfilePic), // Use constant from ApiConfig
       );
 
-      // Add the user email to the request body
-      request.fields['userEmail'] =
-          widget.currentUser.email; // Use widget.currentUser
+      // Add the user ID to the request body (changed from email)
+      request.fields['userId'] =
+          widget.currentUser.id.toString(); // Use widget.currentUser
 
       // Add the image file
       request.files.add(

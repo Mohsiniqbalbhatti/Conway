@@ -60,7 +60,7 @@ class AddMembersScreenState extends State<AddMembersScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/search-user'),
+        Uri.parse('${ApiConfig.baseUrl}/api/search-user'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'query': query,
@@ -123,7 +123,7 @@ class AddMembersScreenState extends State<AddMembersScreen> {
 
     try {
       final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/groups/${widget.groupId}/members'),
+        Uri.parse('${ApiConfig.baseUrl}/api/groups/${widget.groupId}/members'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'emailsToAdd': emailsToAdd,

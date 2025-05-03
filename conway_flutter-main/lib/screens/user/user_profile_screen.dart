@@ -31,6 +31,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   String? _profileUrlState; // To hold profile URL if fetched/updated
 
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>(); // Add form key
+  final ImagePicker _picker = ImagePicker(); // Add ImagePicker instance
 
   // Define colors for consistency
   final Color primaryColor = const Color(0xFF19BFB7);
@@ -190,11 +191,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   Future<String?> _uploadImage(XFile image) async {
     try {
       // Create multipart request
-      final request = http.MultipartRequest(
-        'POST',
-        // CORRECTED: Use the full API path including /api/user/
-        Uri.parse('${ApiConfig.baseUrl}/api/user/profile-picture'),
-      );
+      final url = Uri.parse(ApiConfig.uploadProfilePic);
+      debugPrint('[UPLOAD DEBUG] Using URL: $url'); // Log the URL
+      final request = http.MultipartRequest('POST', url);
 
       // Add fields
       // Add the userId to associate the picture with the user
@@ -211,6 +210,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       );
 
       // Send request
+      debugPrint(
+        '[UPLOAD DEBUG] Full Request URL: ${request.url.toString()}',
+      ); // Log the full request URL
       final streamedResponse = await request.send();
 
       // Read response
@@ -251,6 +253,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
+  // New function to handle picking and uploading
+  Future<void> _pickAndUpdateProfileImage() async {
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image != null && mounted) {
+      await _uploadImage(image); // Call the existing function
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool hasProfileUrl =
@@ -282,31 +292,36 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 // --- Profile Picture ---
-                Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CircleAvatar(
-                      radius: 65, // Slightly larger
-                      backgroundColor: Colors.grey.shade300,
-                      child: CircleAvatar(
-                        radius: 60,
-                        backgroundColor: Colors.white, // Inner background
-                        backgroundImage:
-                            hasProfileUrl
-                                ? CachedNetworkImageProvider(_profileUrlState!)
-                                : null,
-                        child:
-                            !hasProfileUrl
-                                ? Icon(
-                                  Icons.person,
-                                  size: 60,
-                                  color: Colors.grey[500], // Softer color
-                                )
-                                : null,
+                InkWell(
+                  onTap: _pickAndUpdateProfileImage, // Call the handler
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      CircleAvatar(
+                        radius: 65, // Slightly larger
+                        backgroundColor: Colors.grey.shade300,
+                        child: CircleAvatar(
+                          radius: 60,
+                          backgroundColor: Colors.white, // Inner background
+                          backgroundImage:
+                              hasProfileUrl
+                                  ? CachedNetworkImageProvider(
+                                    _profileUrlState!,
+                                  )
+                                  : null,
+                          child:
+                              !hasProfileUrl
+                                  ? Icon(
+                                    Icons.person,
+                                    size: 60,
+                                    color: Colors.grey[500], // Softer color
+                                  )
+                                  : null,
+                        ),
                       ),
-                    ),
-                    // Consider adding an edit icon overlay later if needed
-                  ],
+                      // Consider adding an edit icon overlay later if needed
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 40), // Increased spacing
                 // --- Full Name Field ---

@@ -141,7 +141,7 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
         debugPrint("Image uploaded, URL: $newImageUrl. Updating group...");
         try {
           final response = await http.put(
-            Uri.parse('${ApiConfig.baseUrl}/groups/${widget.groupId}'),
+            Uri.parse('${ApiConfig.baseUrl}/api/groups/${widget.groupId}'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'profileUrl': newImageUrl, // Update profileUrl field
@@ -202,7 +202,7 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
       final request = http.MultipartRequest(
         'POST',
         // Use the correct endpoint from group.js (assuming it's mounted at /api)
-        Uri.parse('${ApiConfig.baseUrl}/group-picture'),
+        Uri.parse('${ApiConfig.baseUrl}/api/group-picture'),
       );
 
       // Add fields
