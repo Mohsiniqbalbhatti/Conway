@@ -495,6 +495,48 @@ router.post("/groups/:groupId/invite", async (req, res) => {
   }
 });
 
+// POST Respond to Group Invitation - User Only
+router.post("/groups/:groupId/respond", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId, action } = req.body; // action: 'accept' | 'reject'
+    if (!userId || !["accept", "reject"].includes(action)) {
+      return res
+        .status(400)
+        .json({ error: "userId and valid action required" });
+    }
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+    // Find the pending invitation for this user
+    const idx = group.invitedMembers.findIndex(
+      (im) => im.user.toString() === userId
+    );
+    if (idx === -1) {
+      return res.status(404).json({ error: "Invitation not found" });
+    }
+    // If accepted, add user to group members
+    if (action === "accept") {
+      group.users.push(userId);
+    }
+    // Remove the invitation entry
+    group.invitedMembers.splice(idx, 1);
+    group.updatedAt = Date.now();
+    await group.save();
+    res.json({ message: `Invitation ${action}ed` });
+  } catch (err) {
+    console.error(
+      `[RESPOND INVITATION Error] Group ${req.params.groupId}:`,
+      err
+    );
+    res.status(500).json({
+      error: "Failed to respond to invitation",
+      details: err.message,
+    });
+  }
+});
+
 // POST Request to Join Group - User Only
 router.post("/groups/:groupId/join-requests", async (req, res) => {
   try {
