@@ -43,11 +43,16 @@ router.post("/search-user", async (req, res) => {
 
 // ➕ Create Group (fixed)
 router.post("/search-group", async (req, res) => {
-  const { groupName } = req.body;
-
+  const { groupName, userId } = req.body; // userId optional: filter out groups where user is a member
   try {
-    const regex = new RegExp(groupName, "i");
-    const groups = await Group.find({ groupName: regex }).populate(
+    const regex = new RegExp(groupName || "", "i");
+    // Build criteria
+    const criteria = { groupName: regex };
+    if (userId) {
+      // Exclude groups where user is already a member
+      criteria.users = { $ne: userId };
+    }
+    const groups = await Group.find(criteria).populate(
       "creator",
       "fullname email"
     );

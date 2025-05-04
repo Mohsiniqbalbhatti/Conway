@@ -273,7 +273,8 @@ router.get("/groups/:groupId/details", async (req, res) => {
     const group = await Group.findById(groupId)
       .populate("creator", "fullname email _id") // Populate creator info
       .populate("users", "fullname email profileUrl _id") // Populate member info
-      .populate("invitedMembers.user", "fullname email profileUrl _id"); // Populate invited users
+      .populate("invitedMembers.user", "fullname email profileUrl _id") // Populate invited users
+      .populate("joinRequests.user", "fullname email profileUrl _id"); // Populate join request users
 
     if (!group) {
       return res.status(404).json({ error: "Group not found" });
@@ -294,6 +295,19 @@ router.get("/groups/:groupId/details", async (req, res) => {
         invitedAt: inv.invitedAt,
         respondedAt: inv.respondedAt,
       }));
+
+    // Only return pending join requests
+    const pendingRequests = group.joinRequests.map((jr) => ({
+      _id: jr._id,
+      user: {
+        _id: jr.user._id,
+        fullname: jr.user.fullname,
+        email: jr.user.email,
+        profileUrl: jr.user.profileUrl,
+      },
+      requestedAt: jr.requestedAt,
+    }));
+
     res.json({
       _id: group._id,
       groupName: group.groupName,
@@ -307,6 +321,7 @@ router.get("/groups/:groupId/details", async (req, res) => {
         profileUrl: user.profileUrl,
       })),
       invitedMembers: pendingInvites,
+      joinRequests: pendingRequests,
       createdAt: group.createdAt,
       updatedAt: group.updatedAt,
     });
@@ -480,39 +495,77 @@ router.post("/groups/:groupId/invite", async (req, res) => {
   }
 });
 
-// POST Respond to Group Invitation
-router.post("/groups/:groupId/respond", async (req, res) => {
+// POST Request to Join Group - User Only
+router.post("/groups/:groupId/join-requests", async (req, res) => {
   try {
     const { groupId } = req.params;
-    const { userId, action } = req.body; // action: 'accept'|'reject'
-    if (!userId || !action || !["accept", "reject"].includes(action)) {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: "User ID required" });
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    // Prevent duplicate requests or membership
+    if (
+      group.users.some((id) => id.toString() === userId) ||
+      group.joinRequests.some((jr) => jr.user.toString() === userId)
+    ) {
       return res
         .status(400)
-        .json({ error: "userId and valid action required" });
+        .json({ error: "Already a member or pending request" });
+    }
+    group.joinRequests.push({ user: userId });
+    group.updatedAt = Date.now();
+    await group.save();
+    res.json({ message: "Join request sent" });
+  } catch (err) {
+    console.error(`[JOIN REQUEST Error] Group ${req.params.groupId}:`, err);
+    res
+      .status(500)
+      .json({ error: "Failed to send join request", details: err.message });
+  }
+});
+
+// POST Respond to Join Request - Admin Only
+router.post("/groups/:groupId/join-requests/respond", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId, requestUserId, action } = req.body; // action: 'accept'|'reject'
+    if (!userId || !requestUserId || !["accept", "reject"].includes(action)) {
+      return res
+        .status(400)
+        .json({ error: "userId, requestUserId, and valid action required" });
     }
     const group = await Group.findById(groupId);
     if (!group) return res.status(404).json({ error: "Group not found" });
-    // find invitation
-    const inviteIndex = group.invitedMembers.findIndex(
-      (im) => im.user.toString() === userId
+    // Authorization: only creator
+    if (group.creator.toString() !== userId) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: only group admin can respond to requests" });
+    }
+    const idx = group.joinRequests.findIndex(
+      (jr) => jr.user.toString() === requestUserId
     );
-    if (inviteIndex === -1) {
-      return res.status(404).json({ error: "Invitation not found" });
+    if (idx === -1) {
+      return res.status(404).json({ error: "Join request not found" });
     }
-    // If accepted, add to users
+    // Accept => add to members
     if (action === "accept") {
-      group.users.push(userId);
+      group.users.push(requestUserId);
     }
-    // Remove the invitation subdocument
-    group.invitedMembers.splice(inviteIndex, 1);
+    // Remove the request
+    group.joinRequests.splice(idx, 1);
     group.updatedAt = Date.now();
     await group.save();
-    res.json({ message: `Invitation ${action}ed and removed` });
+    res.json({ message: `Request ${action}ed` });
   } catch (err) {
-    console.error(`[RESPOND INVITE Error] Group ${req.params.groupId}:`, err);
-    res
-      .status(500)
-      .json({ error: "Failed to respond to invitation", details: err.message });
+    console.error(
+      `[RESPOND JOIN REQUEST Error] Group ${req.params.groupId}:`,
+      err
+    );
+    res.status(500).json({
+      error: "Failed to respond to join request",
+      details: err.message,
+    });
   }
 });
 
@@ -551,6 +604,38 @@ router.post("/groups/:groupId/remove-member", async (req, res) => {
     res
       .status(500)
       .json({ error: "Failed to remove member", details: err.message });
+  }
+});
+
+// POST Leave Group - Member Only
+router.post("/groups/:groupId/leave", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: "User ID required" });
+    }
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+    // Prevent creator from leaving
+    if (group.creator.toString() === userId) {
+      return res.status(400).json({
+        error: "Group creator cannot leave the group. Delete group instead.",
+      });
+    }
+    // Remove user from users and admins arrays
+    group.users = group.users.filter((id) => id.toString() !== userId);
+    group.admins = group.admins.filter((id) => id.toString() !== userId);
+    group.updatedAt = Date.now();
+    await group.save();
+    res.json({ message: "Left group successfully" });
+  } catch (err) {
+    console.error(`[LEAVE GROUP Error] Group ID ${req.params.groupId}:`, err);
+    res
+      .status(500)
+      .json({ error: "Failed to leave group", details: err.message });
   }
 });
 

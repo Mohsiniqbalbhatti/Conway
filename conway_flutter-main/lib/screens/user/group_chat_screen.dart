@@ -696,9 +696,14 @@ class GroupChatScreenState extends State<GroupChatScreen> {
                         currentUserId: _currentUser!.id, // Pass current user ID
                       ),
                 ),
-              ).then((_) {
-                // Optional: Refresh details if settings were changed
-                // _fetchGroupDetails();
+              ).then((left) {
+                if (left == true) {
+                  // User left the group, close chat screen
+                  if (mounted) Navigator.pop(context, true);
+                } else {
+                  // Refresh group details if returned from settings
+                  _fetchGroupDetails();
+                }
               });
             } else {
               // Handle case where user data isn't loaded yet

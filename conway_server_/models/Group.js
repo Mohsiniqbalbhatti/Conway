@@ -50,6 +50,19 @@ const groupSchema = new mongoose.Schema({
       },
     },
   ],
+  joinRequests: [
+    {
+      user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+      requestedAt: {
+        type: Date,
+        default: Date.now,
+      },
+    },
+  ],
   createdAt: {
     type: Date,
     default: Date.now,

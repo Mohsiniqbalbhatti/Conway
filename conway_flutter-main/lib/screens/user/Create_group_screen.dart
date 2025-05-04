@@ -24,6 +24,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
   List<Map<String, dynamic>> _allGroups = [];
   bool _isLoading = false;
   User? _currentUser;
+  Set<String> _requestedGroupIds = {};
 
   @override
   void initState() {
@@ -143,7 +144,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
       final response = await http.post(
         Uri.parse('${ApiConfig.baseUrl}/api/search-group'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'groupName': ''}),
+        body: jsonEncode({'groupName': '', 'userId': _currentUser?.id}),
       );
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -213,6 +214,33 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
           context,
         ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
+    }
+  }
+
+  Future<void> _requestJoinGroup(String groupId) async {
+    if (_currentUser == null) return;
+    setState(() => _requestedGroupIds.add(groupId));
+    try {
+      final resp = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/api/groups/$groupId/join-requests'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'userId': _currentUser!.id}),
+      );
+      if (resp.statusCode == 200) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Join request sent')));
+      } else {
+        setState(() => _requestedGroupIds.remove(groupId));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to send request')));
+      }
+    } catch (e) {
+      setState(() => _requestedGroupIds.remove(groupId));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
@@ -375,17 +403,27 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
                               subtitle: Text(
                                 'Created by: ${group['creator']['fullname']}',
                               ),
-                              trailing: ElevatedButton(
-                                onPressed: () => _joinGroup(group['_id']),
-                                style: ElevatedButton.styleFrom(
-                                  foregroundColor: Colors.white,
-                                  backgroundColor: _secondaryColor,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                ),
-                                child: const Text('Join'),
-                              ),
+                              trailing:
+                                  _requestedGroupIds.contains(group['_id'])
+                                      ? const Text(
+                                        'Requested',
+                                        style: TextStyle(color: Colors.grey),
+                                      )
+                                      : ElevatedButton(
+                                        onPressed:
+                                            () =>
+                                                _requestJoinGroup(group['_id']),
+                                        style: ElevatedButton.styleFrom(
+                                          foregroundColor: Colors.white,
+                                          backgroundColor: _secondaryColor,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              20,
+                                            ),
+                                          ),
+                                        ),
+                                        child: const Text('Join'),
+                                      ),
                             );
                           },
                         ),
@@ -424,17 +462,27 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
                               ),
                               title: Text(group['groupName'] ?? ''),
                               subtitle: Text('${group['memberCount']} members'),
-                              trailing: ElevatedButton(
-                                onPressed: () => _joinGroup(group['_id']),
-                                style: ElevatedButton.styleFrom(
-                                  foregroundColor: Colors.white,
-                                  backgroundColor: _primaryColor,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                ),
-                                child: const Text('Join'),
-                              ),
+                              trailing:
+                                  _requestedGroupIds.contains(group['_id'])
+                                      ? const Text(
+                                        'Requested',
+                                        style: TextStyle(color: Colors.grey),
+                                      )
+                                      : ElevatedButton(
+                                        onPressed:
+                                            () =>
+                                                _requestJoinGroup(group['_id']),
+                                        style: ElevatedButton.styleFrom(
+                                          foregroundColor: Colors.white,
+                                          backgroundColor: _primaryColor,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              20,
+                                            ),
+                                          ),
+                                        ),
+                                        child: const Text('Join'),
+                                      ),
                             );
                           },
                         ),

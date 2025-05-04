@@ -35,7 +35,8 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
       []; // Use state variable for members
   List<Map<String, dynamic>> _invitedState = [];
   DateTime? _createdAtState; // Add state variable for creation date
-  bool _showInvitedTab = false;
+  int _selectedTab = 0; // 0: members, 1: invited, 2: requests
+  List<Map<String, dynamic>> _requestsState = [];
 
   final TextEditingController _nameEditController = TextEditingController();
   final ImagePicker _picker = ImagePicker(); // Image picker instance
@@ -80,13 +81,14 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
           _membersState = List<Map<String, dynamic>>.from(
             data['members'] ?? [],
           );
-          // Only keep pending invitations
           _invitedState =
               (data['invitedMembers'] as List<dynamic>? ?? [])
                   .where((inv) => inv['status'] == 'pending')
                   .map((inv) => Map<String, dynamic>.from(inv as Map))
                   .toList();
-          // Parse and store createdAt date
+          _requestsState = List<Map<String, dynamic>>.from(
+            data['joinRequests'] as List<dynamic>? ?? [],
+          );
           final createdAtString = data['createdAt'] as String?;
           _createdAtState =
               createdAtString != null
@@ -286,7 +288,67 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
 
   // Add helper to show either invited or members list
   Widget _buildMembersOrInvited() {
-    if (_showInvitedTab) {
+    if (_selectedTab == 0) {
+      // Members
+      if (_membersState.isEmpty) {
+        return const Padding(
+          padding: EdgeInsets.symmetric(vertical: 20.0),
+          child: Text(
+            'No members found.',
+            style: TextStyle(color: Colors.grey),
+          ),
+        );
+      }
+      return ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: _membersState.length,
+        itemBuilder: (context, index) {
+          final member = _membersState[index];
+          final memberId = member['_id'] as String?;
+          final profileUrl = member['profileUrl'] as String?;
+          final isMemberAdmin = memberId == _creatorId;
+          return ListTile(
+            leading: CircleAvatar(
+              radius: 20,
+              backgroundColor: Colors.grey[200],
+              backgroundImage:
+                  profileUrl != null && profileUrl.isNotEmpty
+                      ? CachedNetworkImageProvider(profileUrl)
+                      : null,
+              child:
+                  profileUrl == null || profileUrl.isEmpty
+                      ? const Icon(Icons.person)
+                      : null,
+            ),
+            title: Text(member['fullname'] ?? 'Unknown User'),
+            subtitle: Text(member['email'] ?? ''),
+            trailing:
+                isMemberAdmin
+                    ? const Chip(
+                      label: Text('Admin'),
+                      backgroundColor: Colors.blueGrey,
+                      labelStyle: TextStyle(color: Colors.white, fontSize: 10),
+                      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                    )
+                    : (_isAdmin && memberId != null
+                        ? IconButton(
+                          icon: Icon(
+                            Icons.remove_circle_outline,
+                            color: Colors.red[700],
+                          ),
+                          onPressed:
+                              () => _showRemoveMemberConfirmation(
+                                memberId,
+                                member['fullname'] ?? 'Member',
+                              ),
+                        )
+                        : null),
+          );
+        },
+      );
+    } else if (_selectedTab == 1) {
+      // Invited
       if (_invitedState.isEmpty) {
         return const Padding(
           padding: EdgeInsets.symmetric(vertical: 20.0),
@@ -334,12 +396,13 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
           );
         },
       );
-    } else {
-      if (_membersState.isEmpty) {
+    } else if (_selectedTab == 2) {
+      // Join Requests
+      if (_requestsState.isEmpty) {
         return const Padding(
           padding: EdgeInsets.symmetric(vertical: 20.0),
           child: Text(
-            'No members found.',
+            'No join requests.',
             style: TextStyle(color: Colors.grey),
           ),
         );
@@ -347,51 +410,47 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
       return ListView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        itemCount: _membersState.length,
+        itemCount: _requestsState.length,
         itemBuilder: (context, index) {
-          final member = _membersState[index];
-          final String? memberId = member['_id'] as String?;
-          final memberProfileUrl = member['profileUrl'] as String?;
-          final bool hasMemberProfile =
-              memberProfileUrl != null && memberProfileUrl.isNotEmpty;
-          final bool isMemberAdmin = memberId != null && memberId == _creatorId;
+          final req = _requestsState[index];
+          final user = req['user'] as Map<String, dynamic>;
           return ListTile(
             leading: CircleAvatar(
-              radius: 20,
-              backgroundColor: Colors.grey[200],
               backgroundImage:
-                  hasMemberProfile
-                      ? CachedNetworkImageProvider(memberProfileUrl!)
+                  (user['profileUrl'] as String?)?.isNotEmpty == true
+                      ? CachedNetworkImageProvider(user['profileUrl'])
                       : null,
-              child: !hasMemberProfile ? const Icon(Icons.person) : null,
+              child:
+                  (user['profileUrl'] as String?)?.isNotEmpty == true
+                      ? null
+                      : const Icon(Icons.person_add),
             ),
-            title: Text(member['fullname'] ?? 'Unknown User'),
-            subtitle: Text(member['email'] ?? ''),
-            trailing:
-                isMemberAdmin
-                    ? const Chip(
-                      label: Text('Admin'),
-                      backgroundColor: Colors.blueGrey,
-                      labelStyle: TextStyle(color: Colors.white, fontSize: 10),
-                      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                    )
-                    : (_isAdmin && memberId != null
-                        ? IconButton(
-                          icon: Icon(
-                            Icons.remove_circle_outline,
-                            color: Colors.red[700],
-                          ),
-                          onPressed: () {
-                            _showRemoveMemberConfirmation(
-                              memberId,
-                              member['fullname'] ?? 'Member',
-                            );
-                          },
-                        )
-                        : null),
+            title: Text(user['fullname'] ?? ''),
+            subtitle: Text(user['email'] ?? ''),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: Icon(Icons.check_circle, color: Colors.green[700]),
+                  tooltip: 'Accept request',
+                  onPressed:
+                      () =>
+                          _respondJoinRequest(user['_id'].toString(), 'accept'),
+                ),
+                IconButton(
+                  icon: Icon(Icons.cancel, color: Colors.red[700]),
+                  tooltip: 'Reject request',
+                  onPressed:
+                      () =>
+                          _respondJoinRequest(user['_id'].toString(), 'reject'),
+                ),
+              ],
+            ),
           );
         },
       );
+    } else {
+      return const SizedBox.shrink();
     }
   }
 
@@ -488,17 +547,16 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
                         const SizedBox(height: 10),
 
                         // Tab Toggle
-                        if (_isAdmin) // Only admin sees invited tab toggle
+                        if (_isAdmin)
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               TextButton(
-                                onPressed: () {
-                                  setState(() => _showInvitedTab = false);
-                                },
+                                onPressed:
+                                    () => setState(() => _selectedTab = 0),
                                 style: TextButton.styleFrom(
                                   backgroundColor:
-                                      !_showInvitedTab
+                                      _selectedTab == 0
                                           ? Theme.of(
                                             context,
                                           ).primaryColor.withOpacity(0.1)
@@ -511,7 +569,7 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
                                   'Members (${_membersState.length})',
                                   style: TextStyle(
                                     color:
-                                        !_showInvitedTab
+                                        _selectedTab == 0
                                             ? Theme.of(context).primaryColor
                                             : Colors.grey,
                                   ),
@@ -519,12 +577,11 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
                               ),
                               const SizedBox(width: 16),
                               TextButton(
-                                onPressed: () {
-                                  setState(() => _showInvitedTab = true);
-                                },
+                                onPressed:
+                                    () => setState(() => _selectedTab = 1),
                                 style: TextButton.styleFrom(
                                   backgroundColor:
-                                      _showInvitedTab
+                                      _selectedTab == 1
                                           ? Theme.of(
                                             context,
                                           ).primaryColor.withOpacity(0.1)
@@ -537,7 +594,32 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
                                   'Invited (${_invitedState.length})',
                                   style: TextStyle(
                                     color:
-                                        _showInvitedTab
+                                        _selectedTab == 1
+                                            ? Theme.of(context).primaryColor
+                                            : Colors.grey,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              TextButton(
+                                onPressed:
+                                    () => setState(() => _selectedTab = 2),
+                                style: TextButton.styleFrom(
+                                  backgroundColor:
+                                      _selectedTab == 2
+                                          ? Theme.of(
+                                            context,
+                                          ).primaryColor.withOpacity(0.1)
+                                          : Colors.transparent,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Requests (${_requestsState.length})',
+                                  style: TextStyle(
+                                    color:
+                                        _selectedTab == 2
                                             ? Theme.of(context).primaryColor
                                             : Colors.grey,
                                   ),
@@ -571,9 +653,7 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
                             'Leave Group',
                             style: TextStyle(color: Colors.red[700]),
                           ),
-                          onPressed: () {
-                            /* TODO: Implement leave group confirmation */
-                          },
+                          onPressed: () => _showLeaveGroupConfirmation(),
                         ),
 
                         if (_isAdmin)
@@ -692,6 +772,121 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Error removing member: $e')));
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  // Show confirmation dialog for leaving the group
+  void _showLeaveGroupConfirmation() {
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: Text('Leave Group'),
+            content: Text('Are you sure you want to leave this group?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('Cancel'),
+              ),
+              TextButton(
+                style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _leaveGroup();
+                },
+                child: Text('Leave'),
+              ),
+            ],
+          ),
+    );
+  }
+
+  // Call the API to leave the group and handle UI
+  Future<void> _leaveGroup() async {
+    setState(() => _isLoading = true);
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/api/groups/${widget.groupId}/leave'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'userId': widget.currentUserId}),
+      );
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Left group successfully')));
+        Navigator.of(context).pop(true); // Indicate change upstream
+      } else {
+        final error = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to leave group: ${error['error'] ?? error['message'] ?? response.statusCode}',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error leaving group: $e')));
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  // Handle accept/reject join requests
+  Future<void> _respondJoinRequest(String requestUserId, String action) async {
+    setState(() => _isLoading = true);
+    try {
+      final resp = await http.post(
+        Uri.parse(
+          '${ApiConfig.baseUrl}/api/groups/${widget.groupId}/join-requests/respond',
+        ),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'userId': widget.currentUserId,
+          'requestUserId': requestUserId,
+          'action': action,
+        }),
+      );
+      if (resp.statusCode == 200) {
+        // Remove from requests list
+        final removed = _requestsState.firstWhere(
+          (r) => r['user']['_id'].toString() == requestUserId,
+        );
+        setState(() {
+          _requestsState.removeWhere(
+            (r) => r['user']['_id'].toString() == requestUserId,
+          );
+          if (action == 'accept') {
+            // Add to members
+            _membersState.add({
+              '_id': removed['user']['_id'],
+              'fullname': removed['user']['fullname'],
+              'email': removed['user']['email'],
+              'profileUrl': removed['user']['profileUrl'] ?? '',
+            });
+          }
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Request ${action}ed successfully')),
+        );
+      } else {
+        final err = jsonDecode(resp.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to ${action} request: ${err['error'] ?? err['message'] ?? resp.statusCode}',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     } finally {
       setState(() => _isLoading = false);
     }
