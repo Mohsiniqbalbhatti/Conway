@@ -24,10 +24,15 @@ module.exports = (io, userSockets) => {
       }
       console.log(`[GETUPDATE] Found user: ${me.fullname} (ID: ${me._id})`);
 
-      // 1. Fetch groups (no change needed here for now)
+      // Fetch groups where user is member or has a pending invitation
       const groups = await Group.find({
-        users: me._id,
         deleted_at: null,
+        $or: [
+          { users: me._id },
+          {
+            invitedMembers: { $elemMatch: { user: me._id, status: "pending" } },
+          },
+        ],
       }).populate("creator", "fullname email");
       console.log(`[GETUPDATE] Found ${groups.length} groups.`);
 
@@ -103,13 +108,23 @@ module.exports = (io, userSockets) => {
       );
 
       res.send({
-        groups: groups.map((g) => ({
-          name: g.groupName,
-          groupId: g._id,
-          creator: g.creator.fullname,
-          memberCount: g.users.length,
-        })),
-        message: responseMessages, // Send the processed list
+        groups: groups.map((g) => {
+          // Determine if user is already a member or just invited
+          const isMember = g.users.some(
+            (uid) => uid.toString() === me._id.toString()
+          );
+          const invite = g.invitedMembers.find(
+            (im) => im.user.toString() === me._id.toString()
+          );
+          return {
+            name: g.groupName,
+            groupId: g._id,
+            creator: g.creator.fullname,
+            memberCount: g.users.length,
+            invitationStatus: isMember ? "member" : invite?.status ?? "pending",
+          };
+        }),
+        message: responseMessages,
       });
     } catch (err) {
       console.error(`[GETUPDATE] Error for ${myemail}:`, err);

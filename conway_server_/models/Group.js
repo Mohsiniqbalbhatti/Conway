@@ -28,6 +28,28 @@ const groupSchema = new mongoose.Schema({
       ref: "User",
     },
   ],
+  invitedMembers: [
+    {
+      user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+      status: {
+        type: String,
+        enum: ["pending"],
+        default: "pending",
+      },
+      invitedAt: {
+        type: Date,
+        default: Date.now,
+      },
+      respondedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+  ],
   createdAt: {
     type: Date,
     default: Date.now,

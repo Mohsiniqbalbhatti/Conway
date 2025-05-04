@@ -25,6 +25,7 @@ class AddMembersScreenState extends State<AddMembersScreen> {
   List<Map<String, dynamic>> _searchResults = [];
   final Set<Map<String, dynamic>> _selectedUsers =
       {}; // Use a Set to avoid duplicates
+  Set<String> _existingMemberIds = {}; // IDs of users already in group
   bool _isLoadingSearch = false;
   bool _isLoadingAdd = false;
   Timer? _debounce;
@@ -32,6 +33,12 @@ class AddMembersScreenState extends State<AddMembersScreen> {
   // Colors
   final Color _primaryColor = const Color(0xFF19BFB7);
   final Color _secondaryColor = const Color(0xFF59A52C);
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExistingMembers();
+  }
 
   @override
   void dispose() {
@@ -73,9 +80,16 @@ class AddMembersScreenState extends State<AddMembersScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        // Exclude existing group members
+        final allUsers = List<Map<String, dynamic>>.from(data['users'] ?? []);
+        final filtered =
+            allUsers
+                .where(
+                  (user) => !_existingMemberIds.contains(user['_id'] as String),
+                )
+                .toList();
         setState(() {
-          // Assuming the API returns a list of users with 'id', 'fullname', 'email', 'profileUrl'
-          _searchResults = List<Map<String, dynamic>>.from(data['users'] ?? []);
+          _searchResults = filtered;
         });
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -101,6 +115,26 @@ class AddMembersScreenState extends State<AddMembersScreen> {
     }
   }
 
+  // Load current group members to filter out in search
+  Future<void> _loadExistingMembers() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/api/groups/${widget.groupId}/details'),
+        headers: {'Content-Type': 'application/json'},
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final members = data['members'] as List<dynamic>? ?? [];
+        setState(() {
+          _existingMemberIds = members.map((m) => m['_id'] as String).toSet();
+        });
+      }
+    } catch (e) {
+      // Ignore or log error
+      debugPrint('Error loading existing members: $e');
+    }
+  }
+
   void _toggleSelection(Map<String, dynamic> user) {
     setState(() {
       if (_selectedUsers.any((selected) => selected['_id'] == user['_id'])) {
@@ -108,7 +142,10 @@ class AddMembersScreenState extends State<AddMembersScreen> {
           (selected) => selected['_id'] == user['_id'],
         );
       } else {
-        _selectedUsers.add(user);
+        // Only add if not already in group
+        if (!_existingMemberIds.contains(user['_id'] as String)) {
+          _selectedUsers.add(user);
+        }
       }
     });
   }
@@ -118,60 +155,43 @@ class AddMembersScreenState extends State<AddMembersScreen> {
 
     setState(() => _isLoadingAdd = true);
 
-    final emailsToAdd =
-        _selectedUsers.map((user) => user['email'] as String).toList();
+    final response = await http.post(
+      Uri.parse('${ApiConfig.baseUrl}/api/groups/${widget.groupId}/invite'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'memberIds':
+            _selectedUsers.map((user) => user['_id'] as String).toList(),
+        'userId': widget.adminId, // Pass admin ID for authorization
+      }),
+    );
 
-    try {
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}/api/groups/${widget.groupId}/members'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'emailsToAdd': emailsToAdd,
-          'userId': widget.adminId, // Pass admin ID for authorization
-        }),
+    if (!mounted) return;
+
+    if (response.statusCode == 200) {
+      final responseData = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(responseData['message'] ?? 'Invitations sent!')),
       );
+      // Clear and return to settings
+      setState(() {
+        _selectedUsers.clear();
+        _searchController.clear();
+        _searchResults = [];
+      });
+      Navigator.pop(context, true);
+    } else {
+      final errorBody = jsonDecode(response.body);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Failed to send invitations: ${response.statusCode} - ${errorBody?['error'] ?? 'Unknown error'}',
+          ),
+        ),
+      );
+    }
 
-      if (!mounted) return;
-
-      if (response.statusCode == 200) {
-        final responseData = jsonDecode(response.body);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              responseData['message'] ?? 'Members added successfully!',
-            ),
-          ),
-        );
-        // Optionally clear selection and search, or pop the screen
-        setState(() {
-          _selectedUsers.clear();
-          _searchController.clear();
-          _searchResults = [];
-        });
-        // Consider popping back to settings screen after success
-        Navigator.pop(context, true); // Pass true to indicate changes were made
-      } else {
-        final errorBody = jsonDecode(response.body);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Failed to add members: ${response.statusCode} - ${errorBody?['error'] ?? 'Unknown error'}',
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Network error adding members: ${e.toString()}'),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoadingAdd = false);
-      }
+    if (mounted) {
+      setState(() => _isLoadingAdd = false);
     }
   }
 
@@ -258,14 +278,23 @@ class AddMembersScreenState extends State<AddMembersScreen> {
                   ),
                   title: Text(user['fullname'] ?? 'Unknown Name'),
                   subtitle: Text(user['email'] ?? 'No email'),
-                  trailing: Checkbox(
-                    value: isSelected,
-                    onChanged: (bool? value) {
-                      _toggleSelection(user);
-                    },
-                    activeColor: _primaryColor,
-                  ),
-                  onTap: () => _toggleSelection(user),
+                  trailing:
+                      _existingMemberIds.contains(user['_id'] as String)
+                          ? const Text(
+                            'Member',
+                            style: TextStyle(color: Colors.grey),
+                          )
+                          : Checkbox(
+                            value: isSelected,
+                            onChanged: (bool? value) {
+                              _toggleSelection(user);
+                            },
+                            activeColor: _primaryColor,
+                          ),
+                  onTap:
+                      _existingMemberIds.contains(user['_id'] as String)
+                          ? null
+                          : () => _toggleSelection(user),
                 );
               },
             ),

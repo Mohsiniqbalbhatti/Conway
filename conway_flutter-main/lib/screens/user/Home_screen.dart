@@ -165,9 +165,9 @@ class HomeScreenState extends State<HomeScreen>
                 'id': group['groupId'],
                 'members': '${group['memberCount'] ?? 'Unknown'} members',
                 'lastActive': group['lastActive'] ?? 'Unknown',
-                // Add group icon/url if backend provides it
-                'groupProfileUrl':
-                    group['groupProfileUrl'], // **Assume backend sends this**
+                'groupProfileUrl': group['groupProfileUrl'],
+                // invitationStatus: 'member' | 'pending' | 'rejected'
+                'invitationStatus': group['invitationStatus'] ?? 'member',
               };
             }).toList();
 
@@ -643,38 +643,86 @@ class HomeScreenState extends State<HomeScreen>
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (context, index) {
                 final group = filteredGroups[index];
+                final status = group['invitationStatus'] as String? ?? 'member';
                 final groupProfileUrl = group['groupProfileUrl'] as String?;
                 final hasGroupProfileUrl =
                     groupProfileUrl != null && groupProfileUrl.isNotEmpty;
-
-                return ListTile(
-                  leading: CircleAvatar(
-                    radius: 24,
-                    backgroundColor: _getUserColor(index + _chats.length),
-                    backgroundImage:
-                        hasGroupProfileUrl
-                            ? CachedNetworkImageProvider(groupProfileUrl)
-                            : null,
-                    child:
-                        !hasGroupProfileUrl
-                            ? const Icon(
-                              Icons.group,
-                              color: Colors.white,
-                              size: 24,
-                            )
-                            : null,
-                  ),
-                  title: Text(
-                    group['name'] ?? 'Unknown',
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                  subtitle: Text(group['members'] ?? ''),
-                  trailing: Text(
+                // Decide subtitle, trailing, and tap behavior
+                Widget subtitleWidget;
+                Widget trailingWidget;
+                GestureTapCallback? onTapAction;
+                if (status == 'pending') {
+                  // Pending invitation: show label + members, and tick/cross icons
+                  subtitleWidget = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Group Invitation',
+                        style: TextStyle(
+                          color: Colors.orange[700],
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        group['members'] ?? '',
+                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                      ),
+                    ],
+                  );
+                  trailingWidget = Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          Icons.check_circle,
+                          color: Colors.green[700],
+                        ),
+                        tooltip: 'Accept Invitation',
+                        onPressed:
+                            () => _respondInvitation(group['id'], 'accept'),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.cancel, color: Colors.red[700]),
+                        tooltip: 'Reject Invitation',
+                        onPressed:
+                            () => _respondInvitation(group['id'], 'reject'),
+                      ),
+                    ],
+                  );
+                  onTapAction = null;
+                } else if (status == 'rejected') {
+                  // Rejected invitation: label + members
+                  subtitleWidget = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Invitation Rejected',
+                        style: TextStyle(
+                          color: Colors.grey[600],
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                      Text(
+                        group['members'] ?? '',
+                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                      ),
+                    ],
+                  );
+                  trailingWidget = SizedBox.shrink();
+                  onTapAction = null;
+                } else {
+                  // Regular joined group
+                  subtitleWidget = Text(
+                    group['members'] ?? '',
+                    style: TextStyle(color: Colors.grey[600]),
+                  );
+                  trailingWidget = Text(
                     group['lastActive'] ?? '',
                     style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                  ),
-                  onTap: () {
-                    // Check mounted before using context
+                  );
+                  onTapAction = () {
                     if (mounted) {
                       Navigator.push(
                         context,
@@ -689,7 +737,32 @@ class HomeScreenState extends State<HomeScreen>
                         ),
                       ).then((_) => _fetchData());
                     }
-                  },
+                  };
+                }
+                return ListTile(
+                  leading: CircleAvatar(
+                    radius: 24,
+                    backgroundColor: _getUserColor(index + _chats.length),
+                    backgroundImage:
+                        hasGroupProfileUrl
+                            ? CachedNetworkImageProvider(groupProfileUrl!)
+                            : null,
+                    child:
+                        !hasGroupProfileUrl
+                            ? const Icon(
+                              Icons.group,
+                              color: Colors.white,
+                              size: 24,
+                            )
+                            : null,
+                  ),
+                  title: Text(
+                    group['name'] ?? 'Unknown',
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  subtitle: subtitleWidget,
+                  trailing: trailingWidget,
+                  onTap: onTapAction,
                 );
               },
             ),
@@ -788,5 +861,41 @@ class HomeScreenState extends State<HomeScreen>
       Colors.orange,
     ];
     return colors[index % colors.length];
+  }
+
+  Future<void> _respondInvitation(String groupId, String action) async {
+    if (_currentUser == null) return;
+    setState(() => _isLoading = true);
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/api/groups/$groupId/respond'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'userId': _currentUser!.id.toString(),
+          'action': action,
+        }),
+      );
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Invitation ${action}ed successfully')),
+        );
+      } else {
+        final err = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to ${action} invitation: ${err['error'] ?? response.statusCode}',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      await _fetchData();
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 }

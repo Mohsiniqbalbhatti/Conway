@@ -33,7 +33,9 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
   String? _profileUrlState; // Use state variable for profile URL
   List<Map<String, dynamic>> _membersState =
       []; // Use state variable for members
+  List<Map<String, dynamic>> _invitedState = [];
   DateTime? _createdAtState; // Add state variable for creation date
+  bool _showInvitedTab = false;
 
   final TextEditingController _nameEditController = TextEditingController();
   final ImagePicker _picker = ImagePicker(); // Image picker instance
@@ -78,6 +80,12 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
           _membersState = List<Map<String, dynamic>>.from(
             data['members'] ?? [],
           );
+          // Only keep pending invitations
+          _invitedState =
+              (data['invitedMembers'] as List<dynamic>? ?? [])
+                  .where((inv) => inv['status'] == 'pending')
+                  .map((inv) => Map<String, dynamic>.from(inv as Map))
+                  .toList();
           // Parse and store createdAt date
           final createdAtString = data['createdAt'] as String?;
           _createdAtState =
@@ -276,6 +284,117 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
   // _leaveGroup()
   // _deleteGroup() (if admin)
 
+  // Add helper to show either invited or members list
+  Widget _buildMembersOrInvited() {
+    if (_showInvitedTab) {
+      if (_invitedState.isEmpty) {
+        return const Padding(
+          padding: EdgeInsets.symmetric(vertical: 20.0),
+          child: Text('No invitations.', style: TextStyle(color: Colors.grey)),
+        );
+      }
+      return ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: _invitedState.length,
+        itemBuilder: (context, index) {
+          final inv = _invitedState[index];
+          final user = inv['user'] as Map<String, dynamic>;
+          final status = inv['status'] as String? ?? 'pending';
+          final profileUrl = user['profileUrl'] as String?;
+          final hasProfile = profileUrl != null && profileUrl.isNotEmpty;
+          Color statusColor;
+          String statusLabel;
+          switch (status) {
+            case 'accepted':
+              statusColor = Colors.green;
+              statusLabel = 'Accepted';
+              break;
+            case 'rejected':
+              statusColor = Colors.red;
+              statusLabel = 'Rejected';
+              break;
+            default:
+              statusColor = Colors.orange;
+              statusLabel = 'Pending';
+          }
+          return ListTile(
+            leading: CircleAvatar(
+              backgroundImage:
+                  hasProfile ? CachedNetworkImageProvider(profileUrl!) : null,
+              child: !hasProfile ? const Icon(Icons.person_add) : null,
+            ),
+            title: Text(user['fullname'] ?? ''),
+            subtitle: Text(user['email'] ?? ''),
+            trailing: Chip(
+              label: Text(statusLabel),
+              backgroundColor: statusColor.withOpacity(0.2),
+              labelStyle: TextStyle(color: statusColor),
+            ),
+          );
+        },
+      );
+    } else {
+      if (_membersState.isEmpty) {
+        return const Padding(
+          padding: EdgeInsets.symmetric(vertical: 20.0),
+          child: Text(
+            'No members found.',
+            style: TextStyle(color: Colors.grey),
+          ),
+        );
+      }
+      return ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: _membersState.length,
+        itemBuilder: (context, index) {
+          final member = _membersState[index];
+          final String? memberId = member['_id'] as String?;
+          final memberProfileUrl = member['profileUrl'] as String?;
+          final bool hasMemberProfile =
+              memberProfileUrl != null && memberProfileUrl.isNotEmpty;
+          final bool isMemberAdmin = memberId != null && memberId == _creatorId;
+          return ListTile(
+            leading: CircleAvatar(
+              radius: 20,
+              backgroundColor: Colors.grey[200],
+              backgroundImage:
+                  hasMemberProfile
+                      ? CachedNetworkImageProvider(memberProfileUrl!)
+                      : null,
+              child: !hasMemberProfile ? const Icon(Icons.person) : null,
+            ),
+            title: Text(member['fullname'] ?? 'Unknown User'),
+            subtitle: Text(member['email'] ?? ''),
+            trailing:
+                isMemberAdmin
+                    ? const Chip(
+                      label: Text('Admin'),
+                      backgroundColor: Colors.blueGrey,
+                      labelStyle: TextStyle(color: Colors.white, fontSize: 10),
+                      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                    )
+                    : (_isAdmin && memberId != null
+                        ? IconButton(
+                          icon: Icon(
+                            Icons.remove_circle_outline,
+                            color: Colors.red[700],
+                          ),
+                          onPressed: () {
+                            _showRemoveMemberConfirmation(
+                              memberId,
+                              member['fullname'] ?? 'Member',
+                            );
+                          },
+                        )
+                        : null),
+          );
+        },
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -368,101 +487,68 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
                         const Divider(),
                         const SizedBox(height: 10),
 
-                        // Members Section Header
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            'Members (${_membersState.length})',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-
-                        // --- Display Real Members ---
-                        _membersState.isEmpty
-                            ? const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 20.0),
-                              child: Text(
-                                'No members found.',
-                                style: TextStyle(color: Colors.grey),
+                        // Tab Toggle
+                        if (_isAdmin) // Only admin sees invited tab toggle
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              TextButton(
+                                onPressed: () {
+                                  setState(() => _showInvitedTab = false);
+                                },
+                                style: TextButton.styleFrom(
+                                  backgroundColor:
+                                      !_showInvitedTab
+                                          ? Theme.of(
+                                            context,
+                                          ).primaryColor.withOpacity(0.1)
+                                          : Colors.transparent,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Members (${_membersState.length})',
+                                  style: TextStyle(
+                                    color:
+                                        !_showInvitedTab
+                                            ? Theme.of(context).primaryColor
+                                            : Colors.grey,
+                                  ),
+                                ),
                               ),
-                            )
-                            : ListView.builder(
-                              shrinkWrap: true,
-                              physics: const NeverScrollableScrollPhysics(),
-                              itemCount: _membersState.length,
-                              itemBuilder: (context, index) {
-                                final member = _membersState[index];
-                                final String? memberId =
-                                    member['_id'] as String?;
-                                final memberProfileUrl =
-                                    member['profileUrl'] as String?;
-                                final bool hasMemberProfile =
-                                    memberProfileUrl != null &&
-                                    memberProfileUrl.isNotEmpty;
-                                // Check if this member is the creator
-                                final bool isMemberAdmin =
-                                    memberId != null && memberId == _creatorId;
+                              const SizedBox(width: 16),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() => _showInvitedTab = true);
+                                },
+                                style: TextButton.styleFrom(
+                                  backgroundColor:
+                                      _showInvitedTab
+                                          ? Theme.of(
+                                            context,
+                                          ).primaryColor.withOpacity(0.1)
+                                          : Colors.transparent,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                ),
+                                child: Text(
+                                  'Invited (${_invitedState.length})',
+                                  style: TextStyle(
+                                    color:
+                                        _showInvitedTab
+                                            ? Theme.of(context).primaryColor
+                                            : Colors.grey,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
 
-                                return ListTile(
-                                  leading: CircleAvatar(
-                                    radius: 20,
-                                    backgroundColor:
-                                        Colors
-                                            .grey[200], // Background for avatar
-                                    backgroundImage:
-                                        hasMemberProfile
-                                            ? CachedNetworkImageProvider(
-                                              memberProfileUrl,
-                                            )
-                                            : null,
-                                    child:
-                                        !hasMemberProfile
-                                            ? const Icon(Icons.person, size: 20)
-                                            : null,
-                                  ),
-                                  title: Text(
-                                    member['fullname'] ?? 'Unknown User',
-                                  ),
-                                  subtitle: Text(member['email'] ?? ''),
-                                  // Display "Admin" chip if the member is the creator
-                                  trailing:
-                                      isMemberAdmin
-                                          ? const Chip(
-                                            label: Text('Admin'),
-                                            backgroundColor: Colors.blueGrey,
-                                            labelStyle: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 10,
-                                            ),
-                                            padding: EdgeInsets.symmetric(
-                                              horizontal: 4,
-                                              vertical: 0,
-                                            ),
-                                          )
-                                          : (_isAdmin && memberId != null
-                                              ? IconButton(
-                                                icon: Icon(
-                                                  Icons.remove_circle_outline,
-                                                  color: Colors.red[700],
-                                                ),
-                                                onPressed: () {
-                                                  _showRemoveMemberConfirmation(
-                                                    memberId!,
-                                                    member['fullname'] ??
-                                                        'Member',
-                                                  );
-                                                },
-                                              )
-                                              : null),
-                                  // TODO: Add option for admin to remove member?
-                                );
-                              },
-                            ),
-                        // --- End Display Real Members ---
+                        const SizedBox(height: 10),
+                        // Display either invited or members list
+                        _buildMembersOrInvited(),
 
                         // Add Members Button (Admin only)
                         if (_isAdmin)

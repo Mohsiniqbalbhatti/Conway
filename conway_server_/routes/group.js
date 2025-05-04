@@ -122,6 +122,14 @@ router.get("/group-messages/:groupId", async (req, res) => {
       return res.status(404).json({ error: "Group not found" });
     }
 
+    // Authorization: Only members can fetch messages
+    if (
+      !requestingUserId ||
+      !group.users.some((id) => id.toString() === requestingUserId.toString())
+    ) {
+      return res.status(403).json({ error: "Forbidden: Not a group member" });
+    }
+
     // Base query: group match, not deleted
     const query = { group: groupId, deleted_at: null };
 
@@ -258,18 +266,34 @@ router.get("/suggested-groups", async (req, res) => {
 // --- Routes for Group Settings ---
 
 // GET Group Details (for settings screen)
+// Includes both members and pending invites
 router.get("/groups/:groupId/details", async (req, res) => {
   try {
     const { groupId } = req.params;
     const group = await Group.findById(groupId)
       .populate("creator", "fullname email _id") // Populate creator info
-      .populate("users", "fullname email profileUrl _id"); // Populate member info
+      .populate("users", "fullname email profileUrl _id") // Populate member info
+      .populate("invitedMembers.user", "fullname email profileUrl _id"); // Populate invited users
 
     if (!group) {
       return res.status(404).json({ error: "Group not found" });
     }
 
-    // Format the response
+    // Only return pending invitations
+    const pendingInvites = group.invitedMembers
+      .filter((inv) => inv.status === "pending")
+      .map((inv) => ({
+        _id: inv._id,
+        user: {
+          _id: inv.user._id,
+          fullname: inv.user.fullname,
+          email: inv.user.email,
+          profileUrl: inv.user.profileUrl,
+        },
+        status: inv.status,
+        invitedAt: inv.invitedAt,
+        respondedAt: inv.respondedAt,
+      }));
     res.json({
       _id: group._id,
       groupName: group.groupName,
@@ -282,6 +306,7 @@ router.get("/groups/:groupId/details", async (req, res) => {
         email: user.email,
         profileUrl: user.profileUrl,
       })),
+      invitedMembers: pendingInvites,
       createdAt: group.createdAt,
       updatedAt: group.updatedAt,
     });
@@ -415,6 +440,79 @@ router.post("/groups/:groupId/members", async (req, res) => {
     res
       .status(500)
       .json({ error: "Failed to add members to group", details: err.message });
+  }
+});
+
+// POST Invite Members to Group - Admin Only
+router.post("/groups/:groupId/invite", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId, memberIds } = req.body; // memberIds: [String]
+    if (!userId || !Array.isArray(memberIds) || memberIds.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "userId and memberIds array required" });
+    }
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    if (group.creator.toString() !== userId) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: only group creator can invite" });
+    }
+    memberIds.forEach((mid) => {
+      // skip if already a member or already invited
+      if (
+        !group.users.some((id) => id.toString() === mid) &&
+        !group.invitedMembers.some((im) => im.user.toString() === mid)
+      ) {
+        group.invitedMembers.push({ user: mid });
+      }
+    });
+    group.updatedAt = Date.now();
+    await group.save();
+    res.json({ message: "Invitations sent successfully" });
+  } catch (err) {
+    console.error(`[INVITE MEMBER Error] Group ${req.params.groupId}:`, err);
+    res
+      .status(500)
+      .json({ error: "Failed to invite members", details: err.message });
+  }
+});
+
+// POST Respond to Group Invitation
+router.post("/groups/:groupId/respond", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId, action } = req.body; // action: 'accept'|'reject'
+    if (!userId || !action || !["accept", "reject"].includes(action)) {
+      return res
+        .status(400)
+        .json({ error: "userId and valid action required" });
+    }
+    const group = await Group.findById(groupId);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    // find invitation
+    const inviteIndex = group.invitedMembers.findIndex(
+      (im) => im.user.toString() === userId
+    );
+    if (inviteIndex === -1) {
+      return res.status(404).json({ error: "Invitation not found" });
+    }
+    // If accepted, add to users
+    if (action === "accept") {
+      group.users.push(userId);
+    }
+    // Remove the invitation subdocument
+    group.invitedMembers.splice(inviteIndex, 1);
+    group.updatedAt = Date.now();
+    await group.save();
+    res.json({ message: `Invitation ${action}ed and removed` });
+  } catch (err) {
+    console.error(`[RESPOND INVITE Error] Group ${req.params.groupId}:`, err);
+    res
+      .status(500)
+      .json({ error: "Failed to respond to invitation", details: err.message });
   }
 });
 
