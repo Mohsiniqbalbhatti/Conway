@@ -21,6 +21,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
 
   List<Map<String, dynamic>> _searchedGroups = [];
   List<Map<String, dynamic>> _suggestedGroups = [];
+  List<Map<String, dynamic>> _allGroups = [];
   bool _isLoading = false;
   User? _currentUser;
 
@@ -29,6 +30,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
     super.initState();
     _loadUserData();
     _loadSuggestedGroups();
+    _fetchAllGroups();
 
     // Set focus to search field after widget is built
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -61,7 +63,9 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
       if (user == null) return;
 
       final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/api/suggested-groups?email=${user.email}'),
+        Uri.parse(
+          '${ApiConfig.baseUrl}/api/suggested-groups?email=${user.email}',
+        ),
         headers: {'Content-Type': 'application/json'},
       );
 
@@ -131,31 +135,44 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
     }
   }
 
-  Future<void> _searchGroups() async {
-    if (_searchGroupController.text.trim().isEmpty) return;
-
+  Future<void> _fetchAllGroups() async {
     setState(() {
       _isLoading = true;
     });
-
     try {
       final response = await http.post(
         Uri.parse('${ApiConfig.baseUrl}/api/search-group'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'groupName': _searchGroupController.text.trim()}),
+        body: jsonEncode({'groupName': ''}),
       );
-
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         setState(() {
-          _searchedGroups = List<Map<String, dynamic>>.from(data['groups']);
+          _allGroups = List<Map<String, dynamic>>.from(data['groups']);
         });
       }
     } catch (e) {
-      debugPrint('Error searching groups: $e');
+      debugPrint('Error fetching all groups: $e');
     } finally {
       setState(() {
         _isLoading = false;
+      });
+    }
+  }
+
+  void _filterGroups(String query) {
+    final trimmed = query.trim().toLowerCase();
+    if (trimmed.isEmpty) {
+      setState(() {
+        _searchedGroups = [];
+      });
+    } else {
+      setState(() {
+        _searchedGroups =
+            _allGroups.where((group) {
+              final name = group['groupName']?.toString().toLowerCase() ?? '';
+              return name.contains(trimmed);
+            }).toList();
       });
     }
   }
@@ -320,7 +337,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
                             },
                           ),
                         ),
-                        onChanged: (_) => _searchGroups(),
+                        onChanged: (value) => _filterGroups(value),
                       ),
 
                       // Search Results
