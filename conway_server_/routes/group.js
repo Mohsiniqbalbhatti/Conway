@@ -418,6 +418,44 @@ router.post("/groups/:groupId/members", async (req, res) => {
   }
 });
 
+// POST Remove Member from Group - Admin Only
+router.post("/groups/:groupId/remove-member", async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId, memberId } = req.body;
+    if (!userId || !memberId) {
+      return res
+        .status(400)
+        .json({ error: "User ID and Member ID are required" });
+    }
+    const group = await Group.findById(groupId);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+    // Authorization: Only the group creator can remove members
+    if (group.creator.toString() !== userId) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: Only group creator can remove members" });
+    }
+    // Prevent removing the creator
+    if (group.creator.toString() === memberId) {
+      return res.status(400).json({ error: "Cannot remove group creator" });
+    }
+    // Remove member from users and admins
+    group.users = group.users.filter((id) => id.toString() !== memberId);
+    group.admins = group.admins.filter((id) => id.toString() !== memberId);
+    group.updatedAt = Date.now();
+    await group.save();
+    res.json({ message: "Member removed successfully" });
+  } catch (err) {
+    console.error(`[REMOVE MEMBER Error] Group ID ${req.params.groupId}:`, err);
+    res
+      .status(500)
+      .json({ error: "Failed to remove member", details: err.message });
+  }
+});
+
 // --- NEW Route to Upload Group Picture ---
 // This route ONLY handles the upload and returns the URL.
 // The actual Group model update happens via PUT /api/groups/:groupId

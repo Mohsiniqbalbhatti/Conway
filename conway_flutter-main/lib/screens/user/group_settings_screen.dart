@@ -396,7 +396,8 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
                               itemCount: _membersState.length,
                               itemBuilder: (context, index) {
                                 final member = _membersState[index];
-                                final memberId = member['_id'] as String?;
+                                final String? memberId =
+                                    member['_id'] as String?;
                                 final memberProfileUrl =
                                     member['profileUrl'] as String?;
                                 final bool hasMemberProfile =
@@ -442,7 +443,21 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
                                               vertical: 0,
                                             ),
                                           )
-                                          : null,
+                                          : (_isAdmin && memberId != null
+                                              ? IconButton(
+                                                icon: Icon(
+                                                  Icons.remove_circle_outline,
+                                                  color: Colors.red[700],
+                                                ),
+                                                onPressed: () {
+                                                  _showRemoveMemberConfirmation(
+                                                    memberId!,
+                                                    member['fullname'] ??
+                                                        'Member',
+                                                  );
+                                                },
+                                              )
+                                              : null),
                                   // TODO: Add option for admin to remove member?
                                 );
                               },
@@ -525,5 +540,74 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
         );
       },
     );
+  }
+
+  // Confirmation dialog for removing a member
+  void _showRemoveMemberConfirmation(String memberId, String memberName) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('Remove Member'),
+          content: Text(
+            'Are you sure you want to remove $memberName from the group?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _removeMember(memberId);
+              },
+              child: const Text('Remove'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Remove a member via API and update UI
+  Future<void> _removeMember(String memberId) async {
+    setState(() => _isLoading = true);
+    try {
+      final response = await http.post(
+        Uri.parse(
+          '${ApiConfig.baseUrl}/api/groups/${widget.groupId}/remove-member',
+        ),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'userId': widget.currentUserId,
+          'memberId': memberId,
+        }),
+      );
+      if (response.statusCode == 200) {
+        setState(() {
+          _membersState.removeWhere((m) => m['_id'] == memberId);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Member removed successfully')),
+        );
+      } else {
+        final error = jsonDecode(response.body);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to remove member: ${error['error'] ?? error['message'] ?? response.statusCode}',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error removing member: $e')));
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 }
