@@ -338,6 +338,7 @@ router.get("/groups/:groupId/details", async (req, res) => {
 
 // PUT Update Group Info (Name, Profile Picture) - Admin Only
 router.put("/groups/:groupId", async (req, res) => {
+  console.log("PUT Update Group Info", req.body);
   try {
     const { groupId } = req.params;
     const { groupName, profileUrl, userId } = req.body; // userId is the ID of the user making the request

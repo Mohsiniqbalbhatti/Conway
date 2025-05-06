@@ -9,6 +9,7 @@ import 'group_settings_screen.dart'; // Import the new settings screen
 import '../../services/socket_service.dart'; // Import SocketService
 import 'dart:async'; // Import async
 import 'package:profanity_filter/profanity_filter.dart'; // Import the filter
+import 'package:cached_network_image/cached_network_image.dart'; // Import CachedNetworkImage
 // Added for member avatars later
 
 class GroupChatScreen extends StatefulWidget {
@@ -42,6 +43,7 @@ class GroupChatScreenState extends State<GroupChatScreen> {
   User? _currentUser;
   String? _creatorId; // To store the group creator's ID
   bool _isAdmin = false; // Flag for admin status
+  String? _groupProfileUrl; // Add state for group profile URL
 
   // Socket Service and Subscriptions
   final SocketService _socketService = SocketService();
@@ -134,6 +136,8 @@ class GroupChatScreenState extends State<GroupChatScreen> {
         setState(() {
           _creatorId = data['creatorId'] as String?;
           _isAdmin = (_currentUser != null && _currentUser!.id == _creatorId);
+          _groupProfileUrl =
+              data['profileUrl'] as String?; // Save group image URL
           _isFetchingDetails = false;
           debugPrint(
             "[GroupChatScreen FetchDetails] Parsed Details. Admin: $_isAdmin (Creator: $_creatorId, Current: ${_currentUser?.id})",
@@ -714,15 +718,26 @@ class GroupChatScreenState extends State<GroupChatScreen> {
           },
           child: Row(
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: _getGroupColor(widget.groupIndex),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.group, color: Colors.white, size: 20),
-              ),
+              _groupProfileUrl != null && _groupProfileUrl!.isNotEmpty
+                  ? CircleAvatar(
+                    radius: 20,
+                    backgroundImage: CachedNetworkImageProvider(
+                      _groupProfileUrl!,
+                    ),
+                  )
+                  : Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: _getGroupColor(widget.groupIndex),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.group,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
               const SizedBox(width: 10),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

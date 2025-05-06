@@ -8,6 +8,8 @@ import '../../constants/api_config.dart';
 // To potentially display user info
 // To get current user if needed again
 import './add_members_screen.dart'; // Import the new screen
+import 'package:http_parser/http_parser.dart';
+import 'package:mime/mime.dart';
 
 class GroupSettingsScreen extends StatefulWidget {
   final String groupId;
@@ -133,6 +135,11 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
         return;
       }
 
+      // Debug: log selected image details
+      debugPrint('Selected image path: ${image.path}');
+      debugPrint('Selected image name: ${image.name}');
+      debugPrint('Selected image mimeType: ${image.mimeType}');
+
       if (!mounted) return;
 
       // Show loading indicator (optional)
@@ -211,20 +218,26 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
       // Create multipart request
       final request = http.MultipartRequest(
         'POST',
-        // Use the correct endpoint from group.js (assuming it's mounted at /api)
         Uri.parse('${ApiConfig.baseUrl}/api/group-picture'),
       );
 
       // Add fields
       request.fields['groupId'] = widget.groupId;
 
-      // Add file
+      // Detect MIME type from file extension
+      final lookupMime = lookupMimeType(image.path);
+      MediaType? mediaType;
+      if (lookupMime != null) {
+        final parts = lookupMime.split('/');
+        if (parts.length == 2) {
+          mediaType = MediaType(parts[0], parts[1]);
+        }
+      }
       request.files.add(
         await http.MultipartFile.fromPath(
           'groupImage', // Field name MUST match upload.single() in backend
           image.path,
-          // Optionally set content type
-          // contentType: MediaType('image', 'jpeg'), // Example
+          contentType: mediaType,
         ),
       );
 
@@ -383,7 +396,7 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
           return ListTile(
             leading: CircleAvatar(
               backgroundImage:
-                  hasProfile ? CachedNetworkImageProvider(profileUrl!) : null,
+                  hasProfile ? CachedNetworkImageProvider(profileUrl) : null,
               child: !hasProfile ? const Icon(Icons.person_add) : null,
             ),
             title: Text(user['fullname'] ?? ''),
@@ -878,7 +891,7 @@ class GroupSettingsScreenState extends State<GroupSettingsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Failed to ${action} request: ${err['error'] ?? err['message'] ?? resp.statusCode}',
+              'Failed to $action request: ${err['error'] ?? err['message'] ?? resp.statusCode}',
             ),
           ),
         );

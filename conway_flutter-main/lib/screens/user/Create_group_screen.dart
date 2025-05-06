@@ -4,6 +4,7 @@ import 'dart:convert';
 import '../../models/user.dart';
 import '../../helpers/database_helper.dart';
 import '../../constants/api_config.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class CreateGroupScreen extends StatefulWidget {
   const CreateGroupScreen({super.key});
@@ -24,7 +25,7 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
   List<Map<String, dynamic>> _allGroups = [];
   bool _isLoading = false;
   User? _currentUser;
-  Set<String> _requestedGroupIds = {};
+  final Set<String> _requestedGroupIds = {};
 
   @override
   void initState() {
@@ -386,18 +387,27 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
                           itemBuilder: (context, index) {
                             final group = _searchedGroups[index];
                             return ListTile(
-                              leading: Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  color: _primaryColor,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.group,
-                                  color: Colors.white,
-                                  size: 24,
-                                ),
+                              leading: CircleAvatar(
+                                radius: 20,
+                                backgroundColor: _primaryColor,
+                                backgroundImage:
+                                    (group['profileUrl'] as String?)
+                                                ?.isNotEmpty ==
+                                            true
+                                        ? CachedNetworkImageProvider(
+                                          group['profileUrl'],
+                                        )
+                                        : null,
+                                child:
+                                    (group['profileUrl'] as String?)
+                                                ?.isNotEmpty ==
+                                            true
+                                        ? null
+                                        : const Icon(
+                                          Icons.group,
+                                          color: Colors.white,
+                                          size: 24,
+                                        ),
                               ),
                               title: Text(group['groupName'] ?? ''),
                               subtitle: Text(
@@ -447,18 +457,27 @@ class CreateGroupScreenState extends State<CreateGroupScreen> {
                           itemBuilder: (context, index) {
                             final group = _suggestedGroups[index];
                             return ListTile(
-                              leading: Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  color: _secondaryColor,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.group,
-                                  color: Colors.white,
-                                  size: 24,
-                                ),
+                              leading: CircleAvatar(
+                                radius: 20,
+                                backgroundColor: _secondaryColor,
+                                backgroundImage:
+                                    (group['profileUrl'] as String?)
+                                                ?.isNotEmpty ==
+                                            true
+                                        ? CachedNetworkImageProvider(
+                                          group['profileUrl'],
+                                        )
+                                        : null,
+                                child:
+                                    (group['profileUrl'] as String?)
+                                                ?.isNotEmpty ==
+                                            true
+                                        ? null
+                                        : const Icon(
+                                          Icons.group,
+                                          color: Colors.white,
+                                          size: 24,
+                                        ),
                               ),
                               title: Text(group['groupName'] ?? ''),
                               subtitle: Text('${group['memberCount']} members'),

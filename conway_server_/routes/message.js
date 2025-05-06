@@ -121,6 +121,7 @@ module.exports = (io, userSockets) => {
             groupId: g._id,
             creator: g.creator.fullname,
             memberCount: g.users.length,
+            groupProfileUrl: g.profileUrl,
             invitationStatus: isMember ? "member" : invite?.status ?? "pending",
           };
         }),
