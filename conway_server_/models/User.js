@@ -57,6 +57,16 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  dateOfBirth: {
+    type: Date,
+    default: null,
+  },
+  timezone: {
+    type: String,
+    default: "UTC", // Default timezone
+  },
+  resetPasswordOtp: { type: String, default: null },
+  resetPasswordOtpExpires: { type: Date, default: null },
 });
 
 // Add index for pendingEmail if needed for lookups, maybe unique sparse?

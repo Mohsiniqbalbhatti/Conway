@@ -10,6 +10,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import '../../constants/api_config.dart';
 import 'signup_screen.dart';
 import '../../services/socket_service.dart'; // Import SocketService
+import 'forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   final void Function(conway_user.User) onLogin;
@@ -341,6 +342,24 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ForgotPasswordScreen(),
+                        ),
+                      );
+                    },
+                    child: Text(
+                      'Forgot Password?',
+                      style: TextStyle(color: _primaryColor),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
                 _buildGradientLoginButton(),
                 const SizedBox(height: 24),
                 _buildDivider(),

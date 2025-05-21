@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:conway/screens/guest/verify_email_change_screen.dart'; // Import the new OTP screen
 import 'package:image_picker/image_picker.dart'; // Import image_picker
+import 'package:intl/intl.dart';
 
 // Rename to reflect editing capability
 class EditProfileScreen extends StatefulWidget {
@@ -29,6 +30,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool _isLoading = false;
   String _errorMessage = '';
   String? _profileUrlState; // To hold profile URL if fetched/updated
+  DateTime? _dateOfBirth;
 
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>(); // Add form key
   final ImagePicker _picker = ImagePicker(); // Add ImagePicker instance
@@ -46,6 +48,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     ); // Use fullname from User model
     _emailController = TextEditingController(text: widget.currentUser.email);
     _profileUrlState = widget.currentUser.profileUrl;
+
+    // Ensure we're correctly setting the initial date of birth
+    _dateOfBirth = widget.currentUser.dateOfBirth;
+    debugPrint(
+      "[EditProfileScreen] InitState with dateOfBirth: ${widget.currentUser.dateOfBirth}",
+    );
   }
 
   @override
@@ -61,13 +69,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (!_formKey.currentState!.validate()) {
       return;
     }
-    // Password validation is now part of the form validator
-    // if (_passwordController.text.isEmpty) {
-    //   setState(
-    //     () => _errorMessage = 'Current password is required to save changes.',
-    //   );
-    //   return;
-    // }
+
+    // ADD DEBUG PRINT FOR TIMEZONE
+    debugPrint(
+      '[EditProfileScreen] Timezone from widget.currentUser.timezone before creating payload: ${widget.currentUser.timezone}',
+    );
 
     final String currentFullname = widget.currentUser.fullname ?? '';
     final String currentEmail = widget.currentUser.email;
@@ -76,16 +82,43 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final String currentPassword =
         _passwordController.text; // Don't trim password
 
+    // Fix DOB comparison - compare dates more accurately
+    final DateTime? initialDateOfBirth = widget.currentUser.dateOfBirth;
+
+    // Debug DOB values
+    debugPrint('Initial DOB: ${initialDateOfBirth?.toIso8601String()}');
+    debugPrint('New DOB: ${_dateOfBirth?.toIso8601String()}');
+
+    // A proper date comparison that handles null values
+    final bool dobChanged =
+        (_dateOfBirth != null && initialDateOfBirth == null) ||
+        (initialDateOfBirth != null && _dateOfBirth == null) ||
+        (_dateOfBirth != null &&
+            initialDateOfBirth != null &&
+            !_isSameDate(_dateOfBirth!, initialDateOfBirth));
+
+    // Debug change detection
+    debugPrint('DOB changed: $dobChanged');
+
     // Check if anything actually changed
     final bool nameChanged = newName.isNotEmpty && newName != currentFullname;
     final bool emailChanged = newEmail.isNotEmpty && newEmail != currentEmail;
+    final bool onlyDobChanged = !nameChanged && !emailChanged && dobChanged;
 
-    if (!nameChanged && !emailChanged) {
+    if (!nameChanged && !emailChanged && !dobChanged) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('No changes detected.'),
           duration: Duration(seconds: 2),
         ),
+      );
+      return;
+    }
+
+    // Password is required UNLESS only the date of birth was changed
+    if (currentPassword.isEmpty && !onlyDobChanged) {
+      setState(
+        () => _errorMessage = 'Current password is required to save changes.',
       );
       return;
     }
@@ -98,10 +131,37 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     try {
       Map<String, dynamic> payload = {
         'userId': widget.currentUser.id,
-        'currentPassword': currentPassword,
+        'timezone': widget.currentUser.timezone ?? 'UTC',
       };
+
+      // Only include password if required
+      if (!onlyDobChanged) {
+        payload['currentPassword'] = currentPassword;
+      }
+
       if (nameChanged) payload['fullname'] = newName;
       if (emailChanged) payload['newEmail'] = newEmail;
+
+      // Always include dateOfBirth in payload when it's changed, using UTC to normalize
+      if (dobChanged) {
+        if (_dateOfBirth != null) {
+          // Normalize to UTC midnight to ensure consistent date handling
+          final utcDate = DateTime.utc(
+            _dateOfBirth!.year,
+            _dateOfBirth!.month,
+            _dateOfBirth!.day,
+          );
+          payload['dateOfBirth'] = utcDate.toIso8601String();
+          debugPrint(
+            'Including normalized DOB in payload: ${utcDate.toIso8601String()}',
+          );
+        } else {
+          payload['dateOfBirth'] = null;
+          debugPrint('Including null DOB in payload');
+        }
+      }
+
+      debugPrint('Sending payload to server: ${jsonEncode(payload)}');
 
       final response = await http
           .put(
@@ -113,64 +173,163 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
       final responseData = jsonDecode(response.body);
 
+      // Debug print to check server response
+      debugPrint('Server response: ${response.body}');
+
       if (!mounted) return;
 
       if (response.statusCode == 200 && responseData['success'] == true) {
         final bool otpRequired = responseData['otpRequired'] ?? false;
 
-        // Update local DB partially (name can be updated now)
-        await DBHelper().updateUserDetails(
-          widget.currentUser.id,
-          fullname: nameChanged ? newName : null,
-          // Email is only updated after OTP verification
-        );
+        // After successful update, fetch the latest user data from the backend
+        conway_user.User updatedUser;
 
-        if (otpRequired) {
-          // Navigate to OTP screen
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('OTP sent to new email. Please verify.'),
-              ),
+        if (!otpRequired) {
+          try {
+            // Fetch the latest user data from the backend
+            final userResponse = await http
+                .get(
+                  Uri.parse(ApiConfig.getUserDetails(widget.currentUser.id)),
+                  headers: {'Content-Type': 'application/json'},
+                )
+                .timeout(const Duration(seconds: 10));
+
+            if (userResponse.statusCode == 200) {
+              final userData = jsonDecode(userResponse.body);
+
+              // Create user model from fetched data
+              updatedUser = conway_user.User(
+                id: widget.currentUser.id,
+                email: userData['email'] ?? widget.currentUser.email,
+                fullname: userData['fullname'],
+                profileUrl: userData['profileUrl'],
+                dateOfBirth:
+                    userData['dateOfBirth'] != null
+                        ? DateTime.tryParse(userData['dateOfBirth'])
+                        : _dateOfBirth, // Fallback to selected date if server doesn't return it
+              );
+
+              // Update local DB with the latest data from server
+              await DBHelper().updateUserDetails(
+                updatedUser.id,
+                fullname: updatedUser.fullname,
+                email: updatedUser.email,
+                dateOfBirth: updatedUser.dateOfBirth,
+                profileUrl: updatedUser.profileUrl,
+              );
+            } else {
+              // If fetching latest data fails, fallback to our local update
+              updatedUser = conway_user.User(
+                id: widget.currentUser.id,
+                email:
+                    emailChanged && !otpRequired
+                        ? newEmail
+                        : widget.currentUser.email,
+                fullname: nameChanged ? newName : widget.currentUser.fullname,
+                profileUrl: widget.currentUser.profileUrl,
+                dateOfBirth:
+                    _dateOfBirth, // Always use the selected date of birth
+              );
+
+              // Update local DB with our changes
+              await DBHelper().updateUserDetails(
+                widget.currentUser.id,
+                fullname: nameChanged ? newName : null,
+                email: emailChanged && !otpRequired ? newEmail : null,
+                dateOfBirth: dobChanged ? _dateOfBirth : null,
+              );
+            }
+          } catch (e) {
+            // If fetching latest data fails, fallback to our local update
+            debugPrint('Error fetching updated user data: $e');
+            updatedUser = conway_user.User(
+              id: widget.currentUser.id,
+              email:
+                  emailChanged && !otpRequired
+                      ? newEmail
+                      : widget.currentUser.email,
+              fullname: nameChanged ? newName : widget.currentUser.fullname,
+              profileUrl: widget.currentUser.profileUrl,
+              dateOfBirth:
+                  _dateOfBirth, // Always use the selected date of birth
+            );
+
+            // Update local DB with our changes
+            await DBHelper().updateUserDetails(
+              widget.currentUser.id,
+              fullname: nameChanged ? newName : null,
+              email: emailChanged && !otpRequired ? newEmail : null,
+              dateOfBirth: dobChanged ? _dateOfBirth : null,
             );
           }
-          // Give snackbar time
-          await Future.delayed(const Duration(milliseconds: 500));
-          if (!mounted) return;
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder:
-                  (_) => VerifyEmailChangeScreen(
-                    userId: widget.currentUser.id,
-                    newEmail: newEmail, // Pass the new email
-                    updatedFullname:
-                        nameChanged
-                            ? newName
-                            : currentFullname, // Pass name for final DB update
-                  ),
+
+          // Show a brief success message
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Profile updated successfully.'),
+              duration: Duration(seconds: 2),
             ),
-          ); // Consider handling result from OTP screen to refresh this one
+          );
+
+          // Go back to the previous screen and pass the updated user object
+          Navigator.pop(context, updatedUser);
         } else {
-          // Only name was changed, update successful
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Profile updated successfully!'),
-                backgroundColor: Colors.green,
-              ),
-            );
-            // Pop back or update parent screen state
-            Navigator.pop(
+          // For OTP case, we can't refresh email yet as it's pending verification
+          updatedUser = conway_user.User(
+            id: widget.currentUser.id,
+            email: widget.currentUser.email, // Don't update email yet
+            fullname: nameChanged ? newName : widget.currentUser.fullname,
+            profileUrl: widget.currentUser.profileUrl,
+            dateOfBirth: _dateOfBirth, // Always use selected date
+          );
+
+          // Update local DB
+          await DBHelper().updateUserDetails(
+            widget.currentUser.id,
+            fullname: nameChanged ? newName : null,
+            dateOfBirth: dobChanged ? _dateOfBirth : null,
+          );
+
+          if (otpRequired) {
+            // Navigate to OTP screen
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('OTP sent to new email. Please verify.'),
+                ),
+              );
+            }
+            // Give snackbar time
+            await Future.delayed(const Duration(milliseconds: 500));
+            if (!mounted) return;
+            Navigator.push(
               context,
-              true,
-            ); // Pass true back to indicate changes were made
+              MaterialPageRoute(
+                builder:
+                    (context) => VerifyEmailChangeScreen(
+                      userId: widget.currentUser.id,
+                      newEmail: newEmail,
+                    ),
+              ),
+            ).then((result) {
+              if (result == true) {
+                // If email verification was successful
+                setState(() {
+                  _errorMessage = '';
+                  _emailController.text = newEmail;
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Email changed successfully.')),
+                );
+              }
+            });
           }
         }
       } else {
-        // Handle backend errors (e.g., wrong password, email taken, etc.)
+        // Handle errors from the API
+        String errorMessage = responseData['error'] ?? 'Update failed.';
         setState(() {
-          _errorMessage = responseData['error'] ?? 'Failed to update profile';
+          _errorMessage = errorMessage;
         });
       }
     } catch (e) {
@@ -259,6 +418,35 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (image != null && mounted) {
       await _uploadImage(image); // Call the existing function
     }
+  }
+
+  Future<void> _pickDateOfBirth() async {
+    final now = DateTime.now();
+    final initialDate =
+        _dateOfBirth ?? DateTime(now.year - 18, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(1900),
+      lastDate: now,
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _dateOfBirth = picked;
+      });
+    }
+  }
+
+  // Helper method to compare two dates ignoring time component
+  bool _isSameDate(DateTime date1, DateTime date2) {
+    // Normalize dates to remove time component completely
+    final normalizedDate1 = DateTime.utc(date1.year, date1.month, date1.day);
+    final normalizedDate2 = DateTime.utc(date2.year, date2.month, date2.day);
+
+    debugPrint(
+      'Comparing dates: ${normalizedDate1.toIso8601String()} and ${normalizedDate2.toIso8601String()}',
+    );
+    return normalizedDate1.isAtSameMomentAs(normalizedDate2);
   }
 
   @override
@@ -403,7 +591,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   obscureText: true,
                   decoration: InputDecoration(
                     labelText: 'Current Password', // Simplified label
-                    hintText: 'Required to save changes', // Hint text
+                    hintText:
+                        'Required for name/email changes', // Updated hint text
                     prefixIcon: Icon(Icons.lock_outline, color: primaryColor),
                     filled: true,
                     fillColor: textFieldFillColor,
@@ -421,12 +610,60 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     ),
                   ),
                   validator: (value) {
-                    // Added validator
-                    if (value == null || value.isEmpty) {
-                      return 'Current password is required';
+                    // Get current form values to check if only DOB changed
+                    final String currentFullname =
+                        widget.currentUser.fullname ?? '';
+                    final String currentEmail = widget.currentUser.email;
+                    final String newName = _nameController.text.trim();
+                    final String newEmail =
+                        _emailController.text.trim().toLowerCase();
+                    final bool nameChanged =
+                        newName.isNotEmpty && newName != currentFullname;
+                    final bool emailChanged =
+                        newEmail.isNotEmpty && newEmail != currentEmail;
+
+                    // Password is only required if changing name or email
+                    if ((nameChanged || emailChanged) &&
+                        (value == null || value.isEmpty)) {
+                      return 'Password required for name/email changes';
                     }
                     return null;
                   },
+                ),
+                const SizedBox(height: 20),
+                GestureDetector(
+                  onTap: _pickDateOfBirth,
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'Date of Birth',
+                      prefixIcon: Icon(Icons.cake, color: primaryColor),
+                      filled: true,
+                      fillColor: textFieldFillColor,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: Colors.grey.shade300),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: primaryColor, width: 1.5),
+                      ),
+                    ),
+                    child: Text(
+                      _dateOfBirth != null
+                          ? DateFormat.yMMMd().format(_dateOfBirth!)
+                          : 'Select your birth date',
+                      style: TextStyle(
+                        color:
+                            _dateOfBirth != null
+                                ? Colors.black87
+                                : Colors.grey[600],
+                      ),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 35), // Increased spacing
                 // --- Error Message Display ---

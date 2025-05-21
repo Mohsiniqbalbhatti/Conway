@@ -4,8 +4,17 @@ class User {
   final String email;
   final String? fullname;
   final String? profileUrl;
+  final DateTime? dateOfBirth;
+  final String? timezone;
 
-  User({required this.id, required this.email, this.fullname, this.profileUrl});
+  User({
+    required this.id,
+    required this.email,
+    this.fullname,
+    this.profileUrl,
+    this.dateOfBirth,
+    this.timezone,
+  });
 
   // Constructor for Firebase users (with String UID)
   factory User.fromFirebase(String uid, String email, String profileUrl) {
@@ -17,6 +26,7 @@ class User {
               .toString(), // Convert string UID to int and then to string
       email: email,
       profileUrl: profileUrl,
+      timezone: null,
     );
   }
 
@@ -28,13 +38,15 @@ class User {
       'email': email,
       'fullname': fullname,
       'profileUrl': profileUrl,
+      'dateOfBirth': dateOfBirth?.toIso8601String(),
+      'timezone': timezone,
     };
   }
 
   // Implement toString to make it easier to see information about each user when debugging.
   @override
   String toString() {
-    return 'User{id: $id, email: $email, profileUrl: $profileUrl}';
+    return 'User{id: $id, email: $email, profileUrl: $profileUrl, dateOfBirth: $dateOfBirth, timezone: $timezone}';
   }
 
   // Factory constructor to create a User from a Map
@@ -44,6 +56,11 @@ class User {
       email: map['email'] ?? '',
       fullname: map['fullname'], // Get from map
       profileUrl: map['profileUrl'],
+      dateOfBirth:
+          map['dateOfBirth'] != null
+              ? DateTime.tryParse(map['dateOfBirth'])
+              : null,
+      timezone: map['timezone'],
     );
   }
 }

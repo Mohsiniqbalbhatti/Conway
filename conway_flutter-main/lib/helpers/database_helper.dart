@@ -22,7 +22,12 @@ class DBHelper {
   Future<Database> _initDB() async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, _dbName);
-    return await openDatabase(path, version: 1, onCreate: _onCreate);
+    return await openDatabase(
+      path,
+      version: 3, // Increment version number for migration
+      onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
+    );
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -31,9 +36,36 @@ class DBHelper {
         user_id TEXT PRIMARY KEY, 
         email TEXT UNIQUE,
         fullname TEXT,
-        profileUrl TEXT
+        profileUrl TEXT,
+        dateOfBirth TEXT,
+        timezone TEXT
       )
       ''');
+  }
+
+  // Handle database migrations when version changes
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    debugPrint("Upgrading database from version $oldVersion to $newVersion");
+
+    if (oldVersion < 2) {
+      // Add dateOfBirth column if upgrading from version 1
+      debugPrint("Adding dateOfBirth column to $_userTable table");
+      try {
+        await db.execute('ALTER TABLE $_userTable ADD COLUMN dateOfBirth TEXT');
+      } catch (e) {
+        debugPrint("Error adding dateOfBirth column: $e");
+        // Handle the case where column might already exist
+      }
+    }
+    if (oldVersion < 3) {
+      // Add timezone column if upgrading from version < 3
+      debugPrint("Adding timezone column to $_userTable table");
+      try {
+        await db.execute('ALTER TABLE $_userTable ADD COLUMN timezone TEXT');
+      } catch (e) {
+        debugPrint("Error adding timezone column: $e");
+      }
+    }
   }
 
   // Insert or update user
@@ -45,7 +77,7 @@ class DBHelper {
       conflictAlgorithm: ConflictAlgorithm.replace, // Replace if user_id exists
     );
     debugPrint(
-      "[DBHelper insertUser] User inserted/replaced: ${user.email}, Fullname: ${user.fullname}",
+      "[DBHelper insertUser] User inserted/replaced: ${user.email}, Fullname: ${user.fullname}, Timezone: ${user.timezone}",
     );
   }
 
@@ -58,7 +90,9 @@ class DBHelper {
     );
 
     if (maps.isNotEmpty) {
-      debugPrint("User retrieved from local DB: ${maps.first['user_id']}");
+      debugPrint(
+        "User retrieved from local DB: ${maps.first['user_id']}, Timezone: ${maps.first['timezone']}",
+      );
       return conway_user.User.fromMap(maps.first);
     } else {
       debugPrint("No user found in local DB.");
@@ -66,18 +100,30 @@ class DBHelper {
     }
   }
 
-  // Update specific user details (like email, name, profileUrl)
+  // Update specific user details (like email, name, profileUrl, dateOfBirth, timezone)
   Future<int> updateUserDetails(
     String userId, {
     String? email,
     String? fullname,
     String? profileUrl,
+    DateTime? dateOfBirth,
+    String? timezone,
   }) async {
     final db = await database;
     Map<String, dynamic> dataToUpdate = {};
     if (email != null) dataToUpdate['email'] = email;
     if (fullname != null) dataToUpdate['fullname'] = fullname;
     if (profileUrl != null) dataToUpdate['profileUrl'] = profileUrl;
+    if (dateOfBirth != null) {
+      dataToUpdate['dateOfBirth'] = dateOfBirth.toIso8601String();
+      debugPrint(
+        "[DBHelper] Updating dateOfBirth to ${dateOfBirth.toIso8601String()} for user $userId",
+      );
+    }
+    if (timezone != null) {
+      dataToUpdate['timezone'] = timezone;
+      debugPrint("[DBHelper] Updating timezone to $timezone for user $userId");
+    }
 
     if (dataToUpdate.isEmpty) {
       debugPrint(
@@ -89,12 +135,32 @@ class DBHelper {
     debugPrint(
       "[DBHelper updateUserDetails] Updating userId: $userId with data: $dataToUpdate",
     );
-    return await db.update(
+
+    int result = await db.update(
       _userTable,
       dataToUpdate,
       where: 'user_id = ?',
       whereArgs: [userId],
     );
+
+    // Verify the update by retrieving the user again
+    if (result > 0) {
+      final List<Map<String, dynamic>> updatedData = await db.query(
+        _userTable,
+        where: 'user_id = ?',
+        whereArgs: [userId],
+      );
+
+      if (updatedData.isNotEmpty) {
+        final storedDateOfBirth = updatedData.first['dateOfBirth'];
+        final storedTimezone = updatedData.first['timezone'];
+        debugPrint(
+          "[DBHelper] After update, stored dateOfBirth is: $storedDateOfBirth, stored timezone is: $storedTimezone",
+        );
+      }
+    }
+
+    return result;
   }
 
   // Clear user data (for logout)

@@ -448,8 +448,18 @@ class HomeScreenState extends State<HomeScreen>
                           onLogout: widget.onLogout,
                         ),
                   ),
-                ).then((_) {
-                  _loadUserData();
+                ).then((result) {
+                  // If the result is a User object, update the current user directly
+                  if (result is conway_user.User) {
+                    setState(() {
+                      _currentUser = result;
+                    });
+                    // No need to fetch full data again, but we should update UI
+                    _fetchData();
+                  } else {
+                    // Fall back to loading user data if we don't get a user object back
+                    _loadUserData();
+                  }
                 });
               } else if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -534,10 +544,28 @@ class HomeScreenState extends State<HomeScreen>
                             )
                             : null,
                   ),
-                  title: Text(
-                    chat['name'] ?? 'Unknown',
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
+                  title:
+                      chat['email'] == 'conway@system'
+                          ? Row(
+                            children: [
+                              Text(
+                                chat['name'] ?? 'Conway',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(width: 2),
+                              const Icon(
+                                Icons.verified,
+                                color: Colors.blue,
+                                size: 16,
+                              ),
+                            ],
+                          )
+                          : Text(
+                            chat['name'] ?? 'Unknown',
+                            style: const TextStyle(fontWeight: FontWeight.w500),
+                          ),
                   subtitle: Text(
                     chat['message'] ?? '',
                     overflow: TextOverflow.ellipsis,
@@ -745,7 +773,7 @@ class HomeScreenState extends State<HomeScreen>
                     backgroundColor: _getUserColor(index + _chats.length),
                     backgroundImage:
                         hasGroupProfileUrl
-                            ? CachedNetworkImageProvider(groupProfileUrl!)
+                            ? CachedNetworkImageProvider(groupProfileUrl)
                             : null,
                     child:
                         !hasGroupProfileUrl
@@ -884,7 +912,7 @@ class HomeScreenState extends State<HomeScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Failed to ${action} invitation: ${err['error'] ?? response.statusCode}',
+              'Failed to $action invitation: ${err['error'] ?? response.statusCode}',
             ),
           ),
         );

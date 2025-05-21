@@ -463,6 +463,7 @@ class ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final bool hasProfileUrl =
         widget.profileUrl != null && widget.profileUrl!.isNotEmpty;
+    final bool isConway = widget.userEmail == 'conway@system';
 
     return Scaffold(
       appBar: AppBar(
@@ -502,30 +503,46 @@ class ChatScreenState extends State<ChatScreen> {
                         : null,
               ),
               const SizedBox(width: 10),
-              Text(
-                widget.userName,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        widget.userName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      if (isConway)
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4.0),
+                          child: Icon(
+                            Icons.verified,
+                            color: Color(0xFF2196F3), // blue tick
+                            size: 18,
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (isConway)
+                    const Text(
+                      'Official Conway account',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.call, color: Colors.white),
-            onPressed: () {
-              // Implement call functionality
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.videocam, color: Colors.white),
-            onPressed: () {
-              // Implement video call functionality
-            },
-          ),
+          // Removed phone call and video call icons
         ],
       ),
       body: Container(
@@ -586,121 +603,136 @@ class ChatScreenState extends State<ChatScreen> {
                         },
                       ),
             ),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.grey.withAlpha(51),
-                    spreadRadius: 1,
-                    blurRadius: 5,
-                    offset: const Offset(0, -1),
+            if (isConway)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                alignment: Alignment.center,
+                child: const Text(
+                  'Only Conway can send messages',
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
                   ),
-                ],
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (_scheduledTime != null || _burnoutTime != null)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 12.0, bottom: 4.0),
-                      child: Text(
-                        _scheduledTime != null
-                            ? 'Scheduled: ${_formatDateTimeUserFriendly(_scheduledTime)}'
-                            : 'Expires: ${_formatDateTimeUserFriendly(_burnoutTime)}',
-                        style: TextStyle(
-                          color:
-                              _scheduledTime != null
-                                  ? Colors.blue[700]
-                                  : Colors.orange[700],
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
+                ),
+              )
+            else
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withAlpha(51),
+                      spreadRadius: 1,
+                      blurRadius: 5,
+                      offset: const Offset(0, -1),
                     ),
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          _burnoutTime != null
-                              ? Icons.local_fire_department
-                              : Icons.local_fire_department_outlined,
-                          color:
-                              _burnoutTime != null
-                                  ? Colors.orange[700]
-                                  : Colors.grey[600],
-                        ),
-                        tooltip:
-                            _burnoutTime == null
-                                ? 'Set message expiry'
-                                : 'Cancel expiry',
-                        onPressed: _handleBurnoutTap,
-                      ),
-                      IconButton(
-                        icon: Icon(
+                  ],
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_scheduledTime != null || _burnoutTime != null)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 12.0, bottom: 4.0),
+                        child: Text(
                           _scheduledTime != null
-                              ? Icons.alarm_on
-                              : Icons.schedule_outlined,
-                          color:
-                              _scheduledTime != null
-                                  ? Colors.blue[700]
-                                  : Colors.grey[600],
-                        ),
-                        tooltip:
-                            _scheduledTime == null
-                                ? 'Schedule message'
-                                : 'Cancel schedule',
-                        onPressed: _handleScheduleTap,
-                      ),
-                      Expanded(
-                        child: TextField(
-                          controller: _messageController,
-                          decoration: InputDecoration(
-                            hintText: 'Type a message...',
-                            hintStyle: TextStyle(color: Colors.grey[400]),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(25),
-                              borderSide: BorderSide.none,
-                            ),
-                            filled: true,
-                            fillColor: Colors.grey[100],
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 10,
-                            ),
-                          ),
-                          textCapitalization: TextCapitalization.sentences,
-                          maxLines: null,
-                          onSubmitted: (_) => _sendMessage(),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: _sendMessage,
-                        child: Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [_primaryColor, _secondaryColor],
-                              begin: Alignment.centerLeft,
-                              end: Alignment.centerRight,
-                            ),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.send,
-                            color: Colors.white,
-                            size: 22,
+                              ? 'Scheduled: ${_formatDateTimeUserFriendly(_scheduledTime)}'
+                              : 'Expires: ${_formatDateTimeUserFriendly(_burnoutTime)}',
+                          style: TextStyle(
+                            color:
+                                _scheduledTime != null
+                                    ? Colors.blue[700]
+                                    : Colors.orange[700],
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                ],
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            _burnoutTime != null
+                                ? Icons.local_fire_department
+                                : Icons.local_fire_department_outlined,
+                            color:
+                                _burnoutTime != null
+                                    ? Colors.orange[700]
+                                    : Colors.grey[600],
+                          ),
+                          tooltip:
+                              _burnoutTime == null
+                                  ? 'Set message expiry'
+                                  : 'Cancel expiry',
+                          onPressed: _handleBurnoutTap,
+                        ),
+                        IconButton(
+                          icon: Icon(
+                            _scheduledTime != null
+                                ? Icons.alarm_on
+                                : Icons.schedule_outlined,
+                            color:
+                                _scheduledTime != null
+                                    ? Colors.blue[700]
+                                    : Colors.grey[600],
+                          ),
+                          tooltip:
+                              _scheduledTime == null
+                                  ? 'Schedule message'
+                                  : 'Cancel schedule',
+                          onPressed: _handleScheduleTap,
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: _messageController,
+                            decoration: InputDecoration(
+                              hintText: 'Type a message...',
+                              hintStyle: TextStyle(color: Colors.grey[400]),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(25),
+                                borderSide: BorderSide.none,
+                              ),
+                              filled: true,
+                              fillColor: Colors.grey[100],
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 10,
+                              ),
+                            ),
+                            textCapitalization: TextCapitalization.sentences,
+                            maxLines: null,
+                            onSubmitted: (_) => _sendMessage(),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: _sendMessage,
+                          child: Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [_primaryColor, _secondaryColor],
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                              ),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.send,
+                              color: Colors.white,
+                              size: 22,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
           ],
         ),
       ),

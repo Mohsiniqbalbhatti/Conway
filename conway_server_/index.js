@@ -11,6 +11,10 @@ const User = require("./models/User");
 const Message = require("./models/Message");
 const Group = require("./models/Group"); // Import Group model
 const Chat = require("./models/Chat"); // Add this line
+const bcrypt = require("bcryptjs");
+const moment = require("moment-timezone");
+const pakistaniFestivals = require("./utils/pakistani_festivals");
+const { sendFestivalWish } = require("./utils/festivalService");
 
 const app = express();
 const server = http.createServer(app);
@@ -29,6 +33,9 @@ const groupRoutes = require("./routes/group");
 const messageRoutes = require("./routes/message")(io, userSockets);
 const searchRoutes = require("./routes/search");
 const userRoutes = require("./routes/user");
+
+// Import birthday service
+const birthdayService = require("./utils/birthdayService");
 
 app.use(cors());
 app.use(bodyParser.json());
@@ -772,7 +779,137 @@ console.log(
   "[Scheduler] Scheduled message & burnout check job started (every 30 seconds)."
 );
 
-// --- End Scheduler Service ---
+// Daily Birthday Job at midnight
+schedule.scheduleJob("0 0 * * *", async () => {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  console.log(`[Birthday Job] Running daily birthday job for ${month}-${day}`);
+  try {
+    const birthdayUsers = await User.find({
+      dateOfBirth: { $exists: true, $ne: null },
+      $expr: {
+        $and: [
+          { $eq: [{ $dayOfMonth: "$dateOfBirth" }, day] },
+          { $eq: [{ $month: "$dateOfBirth" }, month] },
+        ],
+      },
+    });
+    console.log(
+      `[Birthday Job] Found ${birthdayUsers.length} users with birthdays today.`
+    );
+    if (birthdayUsers.length === 0) return;
+    // Ensure system user exists
+    let systemUser = await User.findOne({ userName: "Conway" });
+    if (!systemUser) {
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash("Conway@2025", salt);
+      systemUser = await User.create({
+        fullname: "Conway",
+        userName: "Conway",
+        email: "conway@system",
+        password: hashedPassword,
+        isVerified: true,
+      });
+      console.log(`[Birthday Job] Created system user: ${systemUser._id}`);
+    }
+    for (const user of birthdayUsers) {
+      let chat = await Chat.findOne({
+        participants: { $all: [systemUser._id, user._id] },
+        isGroup: false,
+      });
+      if (!chat) {
+        chat = await Chat.create({
+          participants: [systemUser._id, user._id],
+          isGroup: false,
+        });
+      }
+      const messageText = `Happy Birthday, ${user.fullname}! 🎉`;
+      const newMessage = new Message({
+        sender: systemUser._id,
+        receiver: user._id,
+        chat: chat._id,
+        message: messageText,
+        time: now,
+        sent: true,
+      });
+      await newMessage.save();
+      await Chat.findByIdAndUpdate(chat._id, { lastMessage: newMessage._id });
+      const socketId = userSockets.get(user._id.toString());
+      if (socketId) {
+        io.to(socketId).emit("receiveMessage", {
+          id: newMessage._id.toString(),
+          senderId: systemUser._id.toString(),
+          senderEmail: systemUser.email,
+          senderName: systemUser.fullname,
+          receiverEmail: user.email,
+          text: messageText,
+          time: now.toISOString(),
+          isBurnout: false,
+          expireAt: null,
+          isScheduled: false,
+          scheduledAt: null,
+        });
+      }
+    }
+    console.log("[Birthday Job] Birthday messages sent successfully.");
+  } catch (err) {
+    console.error("[Birthday Job] Error sending birthday messages:", err);
+  }
+});
+
+// --- NEW BIRTHDAY JOBS ---
+// 1. Daily Prepopulation at midnight UTC
+schedule.scheduleJob("0 0 * * *", async () => {
+  console.log("[Birthday Service] Running daily prepopulation job");
+  await birthdayService.prepopulateBirthdayWishes();
+});
+
+// 2. Frequent Sending Job - Run every 6 hours (4 times a day)
+schedule.scheduleJob(
+  {
+    rule: "0 0,6,12,18 * * *",
+    tz: "Asia/Karachi",
+  },
+  async () => {
+    // Cron for every 6 hours (4 times a day)
+    console.log(
+      "[Birthday Service] Running birthday wish sending job (every 6 hours, Asia/Karachi timezone)"
+    );
+    await birthdayService.sendBirthdayWishes(io, userSockets);
+  }
+);
+
+// 3. Daily Cleanup Job - Run at 11:59 PM Asia/Karachi time
+schedule.scheduleJob(
+  {
+    rule: "59 23 * * *",
+    tz: "Asia/Karachi",
+  },
+  async () => {
+    console.log("[Birthday Service] Running cleanup job before new day");
+    await birthdayService.cleanupBirthdayWishes();
+  }
+);
+// --- END NEW BIRTHDAY JOBS ---
+
+// --- NEW FESTIVAL SCHEDULER ---
+schedule.scheduleJob(
+  {
+    rule: "0 0 * * *", // Every day at midnight
+    tz: "Asia/Karachi",
+  },
+  async () => {
+    const today = moment().tz("Asia/Karachi").format("MM-DD");
+    const todayFestivals = pakistaniFestivals.filter((f) => f.date === today);
+    for (const fest of todayFestivals) {
+      await sendFestivalWish(fest.message);
+      console.log(`[Festival Scheduler] Sent festival wish: ${fest.name}`);
+    }
+    // TODO: Add Islamic festival logic here
+  }
+);
+// --- END FESTIVAL SCHEDULER ---
 
 // --- Cloudinary Configuration ---
 if (
