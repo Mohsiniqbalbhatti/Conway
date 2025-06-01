@@ -1,6 +1,6 @@
 class ApiConfig {
   // Change this to your server's IP address
-  static const String baseUrl = 'http://192.168.100.30:3000';
+  static const String baseUrl = 'http://192.168.1.11:3000';
 
   // Authentication endpoints
   static const String requestOtp = '$baseUrl/api/request-otp';
