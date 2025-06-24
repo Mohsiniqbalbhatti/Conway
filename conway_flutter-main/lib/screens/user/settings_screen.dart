@@ -11,6 +11,7 @@ import '../../constants/api_config.dart'; // For API endpoint
 import 'package:cached_network_image/cached_network_image.dart'; // For image display
 import '../../models/user.dart' as conway_user; // Alias User model
 import 'user_profile_screen.dart'; // Renamed profile screen
+import 'report_manager_screen.dart';
 
 // Define colors for consistency outside the class
 const Color primaryColor = Color(0xFF19BFB7);
@@ -704,6 +705,19 @@ class SettingScreenState extends State<SettingScreen> {
                   ),
                 ),
               ),
+              if (_currentUser.email == 'mohsiniqbalbhatti0024@gmail.com')
+                ListTile(
+                  leading: const Icon(Icons.flag, color: primaryColor),
+                  title: const Text('Manage Reports'),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const ReportManagerScreen(),
+                      ),
+                    );
+                  },
+                ),
             ],
           ),
         ),

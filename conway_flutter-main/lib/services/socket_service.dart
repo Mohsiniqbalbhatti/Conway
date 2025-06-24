@@ -20,6 +20,9 @@ class SocketService {
       StreamController<String>.broadcast();
   final StreamController<Map<String, dynamic>> _messageSentController =
       StreamController<Map<String, dynamic>>.broadcast();
+  // Stream for messageError events
+  final StreamController<dynamic> _messageErrorController =
+      StreamController<dynamic>.broadcast();
 
   // Streams for Group Messages (NEW)
   final StreamController<Map<String, dynamic>> _groupMessageController =
@@ -70,6 +73,9 @@ class SocketService {
   // NEW: Stream for message deletion success confirmations (applies to group/direct)
   Stream<Map<String, dynamic>> get onMessageDeleteSuccess =>
       _messageDeleteSuccessController.stream;
+
+  // Public stream for messageError
+  Stream<dynamic> get onMessageError => _messageErrorController.stream;
 
   String? _userId;
   bool get isConnected => _socket?.connected ?? false;
@@ -215,6 +221,7 @@ class SocketService {
 
     _socket!.on('messageError', (data) {
       debugPrint('[SocketService ON messageError] Error from server: $data');
+      _messageErrorController.add(data);
     });
 
     _socket!.on('messageSent', (data) {
@@ -397,6 +404,7 @@ class SocketService {
     _messageController.close();
     _messageExpiredController.close();
     _messageSentController.close();
+    _messageErrorController.close();
     _groupMessageController.close();
     _groupMessageSentController.close();
     _groupMessageExpiredController.close();

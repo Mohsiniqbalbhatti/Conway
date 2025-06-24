@@ -15,6 +15,14 @@ const bcrypt = require("bcryptjs");
 const moment = require("moment-timezone");
 const pakistaniFestivals = require("./utils/pakistani_festivals");
 const { sendFestivalWish } = require("./utils/festivalService");
+const config = require("./src/config/config");
+const { initializeSocket } = require("./src/socket/socketHandler");
+const {
+  checkScheduledAndExpiredMessages,
+} = require("./src/services/messageService");
+const reportRoutes = require("./routes/report");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
@@ -104,6 +112,28 @@ io.on("connection", (socket) => {
     }
 
     try {
+      // --- Profanity Filter (Custom List) ---
+      const profanityPath = path.join(__dirname, "utils/custom_profanity.json");
+      let customProfanity = [];
+      if (fs.existsSync(profanityPath)) {
+        try {
+          customProfanity = JSON.parse(fs.readFileSync(profanityPath, "utf8"));
+        } catch (e) {
+          customProfanity = [];
+        }
+      }
+      const plainMessageText = (messageText || "").toLowerCase();
+      const messageWords = plainMessageText.split(/\s+/);
+      const foundBadWord = customProfanity.find((word) =>
+        messageWords.includes(word)
+      );
+      if (foundBadWord) {
+        socket.emit("messageError", {
+          message: `Your message contains a prohibited word: '${foundBadWord}'. Please remove it and try again.`,
+        });
+        return;
+      }
+
       // --- Get Sender ---
       const sender = await User.findById(senderId).select("fullname email _id");
       if (!sender) {
@@ -114,7 +144,6 @@ io.on("connection", (socket) => {
       const senderName = sender.fullname;
       console.log(`[Socket SEND] Sender found: ${senderName} (${senderId})`);
 
-      const plainMessageText = messageText;
       const now = new Date();
       let newMessageData = {
         sender: senderId,
@@ -543,236 +572,6 @@ io.on("connection", (socket) => {
 });
 
 // --- Scheduler Service ---
-async function checkScheduledAndExpiredMessages() {
-  const now = new Date();
-  // console.log(`[Scheduler] Checking jobs @ ${now.toISOString()}...`);
-  try {
-    // --- Handle Scheduled Messages (Direct & Group) ---
-    const scheduledMessagesToSend = await Message.find({
-      isScheduled: true,
-      scheduledAt: { $lte: now },
-      deleted_at: null, // Ensure not deleted
-    }).populate(
-      "sender receiver group chat",
-      "fullname email _id users participants"
-    ); // Add chat to populate
-
-    // console.log(
-    //   `[Scheduler] Found ${scheduledMessagesToSend.length} potential scheduled messages to send.`
-    // );
-
-    if (scheduledMessagesToSend.length > 0) {
-      for (const msg of scheduledMessagesToSend) {
-        console.log(
-          `[Scheduler] Processing msg ${
-            msg._id
-          }. Scheduled at: ${msg.scheduledAt?.toISOString()}, Current time: ${now.toISOString()}`
-        );
-
-        // Mark as processed BEFORE trying to send/update chat
-        msg.isScheduled = false;
-        await msg.save();
-
-        let messageSentSuccessfully = false; // Flag to track if we should update lastMessage
-
-        // --- Scheduled Group Message ---
-        if (msg.group && msg.chat) {
-          // Check chat exists
-          const groupId = msg.group._id.toString();
-          const senderId = msg.sender?._id.toString();
-          const senderName = msg.sender?.fullname || "Unknown";
-
-          if (!senderId || !msg.chat || !msg.chat.participants) {
-            console.error(
-              `[Scheduler] Skipping scheduled group msg ${msg._id} (missing sender/chat).`
-            );
-            continue;
-          }
-
-          console.log(
-            `[Scheduler] Processing scheduled GROUP message ${msg._id} for group ${groupId}`
-          );
-          const messagePayload = {
-            id: msg._id.toString(),
-            groupId: groupId,
-            senderId: senderId,
-            senderName: senderName,
-            text: msg.message,
-            time: msg.scheduledAt.toISOString(), // Use scheduled time
-            isBurnout: msg.isBurnout,
-            expireAt: msg.expireAt?.toISOString(),
-            isScheduled: false, // It's being sent now
-            scheduledAt: msg.scheduledAt?.toISOString(), // Keep original schedule time
-          };
-
-          msg.chat.participants.forEach((userId) => {
-            const memberIdStr = userId.toString();
-            if (memberIdStr !== senderId) {
-              // Don't send to sender
-              const memberSocketId = userSockets.get(memberIdStr);
-              if (memberSocketId) {
-                console.log(
-                  `[Scheduler] Emitting receiveGroupMessage to member ${memberIdStr} (Socket: ${memberSocketId}) for msg ${msg._id}`
-                );
-                io.to(memberSocketId).emit(
-                  "receiveGroupMessage",
-                  messagePayload
-                );
-              } else {
-                console.log(
-                  `[Scheduler] Member ${memberIdStr} for group msg ${msg._id} is OFFLINE.`
-                );
-              }
-            }
-          });
-          messageSentSuccessfully = true; // Assume success if we reached here
-        }
-        // --- Scheduled Direct Message ---
-        else if (msg.receiver && msg.chat) {
-          // Check chat exists
-          const receiverId = msg.receiver._id.toString();
-          const senderId = msg.sender._id.toString();
-          const senderName = msg.sender.fullname;
-          const senderEmail = msg.sender.email;
-          const receiverEmail = msg.receiver.email;
-
-          if (!receiverId || !senderId || !senderEmail || !receiverEmail) {
-            console.error(
-              `[Scheduler] Skipping scheduled direct msg ${msg._id} (missing info).`
-            );
-            msg.isScheduled = false;
-            await msg.save(); // Mark as processed even if skipped
-            continue;
-          }
-
-          console.log(
-            `[Scheduler] Processing scheduled DIRECT message ${msg._id} to ${receiverEmail}`
-          );
-          const recipientSocketId = userSockets.get(receiverId);
-          const messagePayload = {
-            id: msg._id.toString(),
-            senderId: senderId,
-            senderEmail: senderEmail,
-            senderName: senderName,
-            receiverEmail: receiverEmail,
-            text: msg.message,
-            time: msg.scheduledAt.toISOString(),
-            isBurnout: msg.isBurnout,
-            expireAt: msg.expireAt?.toISOString(),
-            isScheduled: false,
-            scheduledAt: msg.scheduledAt?.toISOString(),
-          };
-
-          if (recipientSocketId) {
-            console.log(
-              `[Scheduler] Sending scheduled msg ${msg._id} to online user ${receiverEmail} (Socket: ${recipientSocketId})`
-            );
-            io.to(recipientSocketId).emit("receiveMessage", messagePayload);
-            msg.sent = true;
-          } else {
-            console.log(
-              `[Scheduler] Scheduled msg ${msg._id} for offline user ${receiverEmail}. Marked for later fetch.`
-            );
-            msg.sent = false;
-          }
-          await msg.save(); // Save sent status
-          messageSentSuccessfully = true; // Assume success if we reached here
-        }
-
-        // --- Update Chat's lastMessage AFTER successful processing/sending ---
-        if (messageSentSuccessfully && msg.chat?._id) {
-          // Ensure chat._id is valid
-          try {
-            await Chat.findByIdAndUpdate(msg.chat._id, {
-              lastMessage: msg._id,
-            });
-            console.log(
-              `[Scheduler] Updated chat ${msg.chat._id} lastMessage to scheduled message ${msg._id}`
-            );
-          } catch (chatUpdateError) {
-            console.error(
-              `[Scheduler] Error updating chat ${msg.chat._id} lastMessage for msg ${msg._id}:`,
-              chatUpdateError
-            );
-          }
-        } else if (!msg.chat?._id) {
-          console.warn(
-            `[Scheduler] Cannot update lastMessage for msg ${msg._id}, chat or chat._id is missing.`
-          );
-        }
-      }
-    }
-
-    // --- Handle Expired Burnout Messages ---
-    const expiredBurnoutMessages = await Message.find({
-      isBurnout: true,
-      expireAt: { $lte: now },
-      deleted_at: null,
-    }).populate("group"); // Populate group to get group ID for emit
-
-    // console.log(
-    //   `[Scheduler] Found ${expiredBurnoutMessages.length} expired burnout messages to clean up.`
-    // );
-
-    for (const msg of expiredBurnoutMessages) {
-      msg.deleted_at = now;
-      await msg.save();
-      console.log(
-        `[Scheduler] Marked burnout message ${
-          msg._id
-        } as deleted (expired at ${msg.expireAt?.toISOString()}).`
-      );
-
-      // --- Emit expiry event to relevant users ---
-      const expiryEventData = {
-        messageId: msg._id.toString(),
-        // Include groupId ONLY if it's a group message
-        groupId: msg.group?._id?.toString(),
-        // Optionally add receiverId if direct message (though less critical for group screen)
-        // receiverId: msg.receiver?._id?.toString(),
-      };
-
-      if (msg.group?._id) {
-        // It's a group message, emit to online members
-        msg.group.users.forEach((memberId) => {
-          const memberIdStr = memberId.toString();
-          const memberSocketId = userSockets.get(memberIdStr);
-          if (memberSocketId) {
-            io.to(memberSocketId).emit("groupMessageExpired", expiryEventData);
-            console.log(
-              `[Scheduler] Emitted 'groupMessageExpired' for msg ${msg._id} to user ${memberIdStr}`
-            );
-          }
-        });
-      } else if (msg.receiver) {
-        // It's a direct message, emit to sender and receiver if online (less relevant for group chat screen)
-        const senderSocketId = userSockets.get(msg.sender.toString());
-        const receiverSocketId = userSockets.get(msg.receiver.toString());
-        if (senderSocketId) {
-          io.to(senderSocketId).emit("messageExpired", {
-            messageId: msg._id.toString(),
-          }); // Use existing direct message event
-          console.log(
-            `[Scheduler] Emitted 'messageExpired' for msg ${msg._id} to sender ${msg.sender}`
-          );
-        }
-        if (receiverSocketId) {
-          io.to(receiverSocketId).emit("messageExpired", {
-            messageId: msg._id.toString(),
-          });
-          console.log(
-            `[Scheduler] Emitted 'messageExpired' for msg ${msg._id} to receiver ${msg.receiver}`
-          );
-        }
-      }
-    }
-
-    // console.log(`[Scheduler] Job run completed.`);
-  } catch (err) {
-    console.error("[Scheduler] Error in scheduled job:", err);
-  }
-}
-
 // Run scheduler every 30 seconds (adjust interval as needed)
 setInterval(checkScheduledAndExpiredMessages, 30 * 1000);
 console.log(
@@ -942,7 +741,7 @@ if (!mongoUri) {
 mongoose
   .connect(mongoUri)
   .then(() => {
-    console.log("MongoDB connected");
+    console.log("Connected to MongoDB");
 
     // Use routes AFTER connection is successful
     app.use("/api", authRoutes);
@@ -950,10 +749,17 @@ mongoose
     app.use("/api", messageRoutes);
     app.use("/api", searchRoutes);
     app.use("/api/user", userRoutes); // Use the new user routes
+    app.use("/api", reportRoutes); // Register report routes
 
-    server.listen(3000, "0.0.0.0", () => {
-      console.log("Server (with Socket.IO) is running on port 3000");
+    server.listen(config.PORT, "0.0.0.0", () => {
+      console.log(`Server is running on port ${config.PORT}`);
     });
+
+    // Start scheduled tasks
+    setInterval(
+      checkScheduledAndExpiredMessages,
+      config.MESSAGE_CHECK_INTERVAL
+    );
   })
   .catch((err) => {
     console.error("MongoDB connection error:", err.message);
@@ -964,3 +770,13 @@ mongoose
     }
     process.exit(1);
   });
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({
+    status: "error",
+    message: "Something went wrong!",
+    error: process.env.NODE_ENV === "development" ? err.message : undefined,
+  });
+});

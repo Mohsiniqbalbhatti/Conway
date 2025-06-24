@@ -545,7 +545,9 @@ class HomeScreenState extends State<HomeScreen>
                             : null,
                   ),
                   title:
-                      chat['email'] == 'conway@system'
+                      (chat['email'] == 'conway@system' ||
+                              chat['email'] ==
+                                  'mohsiniqbalbhatti0024@gmail.com')
                           ? Row(
                             children: [
                               Text(

@@ -9,6 +9,7 @@ import '../../constants/api_config.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:profanity_filter/profanity_filter.dart';
+import 'report_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String userName;
@@ -42,6 +43,7 @@ class ChatScreenState extends State<ChatScreen> {
   StreamSubscription? _messageSubscription;
   StreamSubscription? _messageExpiredSubscription;
   StreamSubscription? _messageSentSubscription;
+  StreamSubscription? _messageErrorSubscription;
 
   DateTime? _scheduledTime;
   DateTime? _burnoutTime;
@@ -109,6 +111,25 @@ class ChatScreenState extends State<ChatScreen> {
     _messageSentSubscription = _socketService.onMessageSent.listen((sentData) {
       debugPrint("[ChatScreen SENT CONFIRM] Received confirmation: $sentData");
       _handleMessageSentConfirmation(sentData);
+    });
+
+    // Listen for messageError events from backend
+    _messageErrorSubscription = _socketService.onMessageError.listen((data) {
+      String errorMsg =
+          'Message contains inappropriate language and cannot be sent.';
+      if (data is Map && data['message'] != null) {
+        errorMsg = data['message'].toString();
+      } else if (data is String) {
+        errorMsg = data;
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: Colors.orangeAccent,
+          ),
+        );
+      }
     });
   }
 
@@ -362,6 +383,7 @@ class ChatScreenState extends State<ChatScreen> {
     _messageSubscription?.cancel();
     _messageExpiredSubscription?.cancel();
     _messageSentSubscription?.cancel();
+    _messageErrorSubscription?.cancel();
     super.dispose();
   }
 
@@ -463,7 +485,9 @@ class ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final bool hasProfileUrl =
         widget.profileUrl != null && widget.profileUrl!.isNotEmpty;
-    final bool isConway = widget.userEmail == 'conway@system';
+    final bool isVerified =
+        widget.userEmail == 'conway@system' ||
+        widget.userEmail == 'mohsiniqbalbhatti0024@gmail.com';
 
     return Scaffold(
       appBar: AppBar(
@@ -516,7 +540,7 @@ class ChatScreenState extends State<ChatScreen> {
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                      if (isConway)
+                      if (isVerified)
                         const Padding(
                           padding: EdgeInsets.only(left: 4.0),
                           child: Icon(
@@ -527,7 +551,7 @@ class ChatScreenState extends State<ChatScreen> {
                         ),
                     ],
                   ),
-                  if (isConway)
+                  if (widget.userEmail == 'conway@system')
                     const Text(
                       'Official Conway account',
                       style: TextStyle(
@@ -603,7 +627,7 @@ class ChatScreenState extends State<ChatScreen> {
                         },
                       ),
             ),
-            if (isConway)
+            if (widget.userEmail == 'conway@system')
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 24),
@@ -757,7 +781,7 @@ class ChatScreenState extends State<ChatScreen> {
         (DateTime.tryParse(scheduledAtStr)?.isAfter(DateTime.now()) ?? false);
 
     return GestureDetector(
-      onLongPress: () => _showMessageDetailsDialog(messageData),
+      onLongPress: () => _showMessageOptionsDialog(messageData),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 5),
         child: Opacity(
@@ -876,6 +900,57 @@ class ChatScreenState extends State<ChatScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  void _showMessageOptionsDialog(Map<String, dynamic> messageData) {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('Message Info'),
+                onTap: () {
+                  Navigator.pop(context);
+                  if (mounted) {
+                    _showMessageDetailsDialog(messageData);
+                  }
+                },
+              ),
+              if (!(messageData['isMe'] ?? false))
+                ListTile(
+                  leading: const Icon(Icons.flag),
+                  title: const Text('Report Message'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    if (mounted) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder:
+                              (context) => ReportScreen(
+                                reportedUserEmail: messageData['senderEmail'],
+                                message: messageData['text'],
+                              ),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ListTile(
+                leading: const Icon(Icons.cancel),
+                title: const Text('Cancel'),
+                onTap: () {
+                  Navigator.pop(context);
+                },
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 

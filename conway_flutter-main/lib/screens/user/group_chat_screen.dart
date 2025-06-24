@@ -10,6 +10,7 @@ import '../../services/socket_service.dart'; // Import SocketService
 import 'dart:async'; // Import async
 import 'package:profanity_filter/profanity_filter.dart'; // Import the filter
 import 'package:cached_network_image/cached_network_image.dart'; // Import CachedNetworkImage
+import 'report_screen.dart'; // Import the ReportScreen
 // Added for member avatars later
 
 class GroupChatScreen extends StatefulWidget {
@@ -54,6 +55,7 @@ class GroupChatScreenState extends State<GroupChatScreen> {
   // NEW: Subscriptions for delete feedback
   StreamSubscription? _messageDeleteErrorSubscription;
   StreamSubscription? _messageDeleteSuccessSubscription;
+  StreamSubscription? _messageErrorSubscription;
 
   // NEW: State for Burnout/Schedule
   DateTime? _scheduledTime;
@@ -244,6 +246,25 @@ class GroupChatScreenState extends State<GroupChatScreen> {
           );
           // You might not need explicit feedback here if the UI update is sufficient
         });
+
+    // Listen for messageError events from backend
+    _messageErrorSubscription = _socketService.onMessageError.listen((data) {
+      String errorMsg =
+          'Message contains inappropriate language and cannot be sent.';
+      if (data is Map && data['message'] != null) {
+        errorMsg = data['message'].toString();
+      } else if (data is String) {
+        errorMsg = data;
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: Colors.orangeAccent,
+          ),
+        );
+      }
+    });
   }
 
   void _handleReceivedGroupMessage(Map<String, dynamic> messageData) {
@@ -569,7 +590,7 @@ class GroupChatScreenState extends State<GroupChatScreen> {
     // NEW: Cancel delete feedback subscriptions
     _messageDeleteErrorSubscription?.cancel();
     _messageDeleteSuccessSubscription?.cancel();
-
+    _messageErrorSubscription?.cancel();
     // Consider disconnecting socket if appropriate for app lifecycle
     // _socketService.disconnect();
     super.dispose();
@@ -1263,6 +1284,10 @@ class GroupChatScreenState extends State<GroupChatScreen> {
     bool canDelete,
   ) {
     final String messageId = messageData['id'];
+    final String reportedUserEmail =
+        messageData['senderId'] == _currentUser?.id.toString()
+            ? null
+            : messageData['senderName'];
 
     showModalBottomSheet(
       context: context,
@@ -1270,7 +1295,6 @@ class GroupChatScreenState extends State<GroupChatScreen> {
         return SafeArea(
           child: Wrap(
             children: <Widget>[
-              // --- NEW: Conditional Delete Option ---
               if (canDelete)
                 ListTile(
                   leading: Icon(Icons.delete_outline, color: Colors.red[700]),
@@ -1287,7 +1311,6 @@ class GroupChatScreenState extends State<GroupChatScreen> {
                     }
                   },
                 ),
-              // --- END NEW ---
               ListTile(
                 leading: const Icon(Icons.info_outline),
                 title: const Text('Message Info'),
@@ -1298,6 +1321,26 @@ class GroupChatScreenState extends State<GroupChatScreen> {
                   }
                 },
               ),
+              if (!(messageData['isMe'] ?? false))
+                ListTile(
+                  leading: const Icon(Icons.flag),
+                  title: const Text('Report Message'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    if (mounted) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder:
+                              (context) => ReportScreen(
+                                reportedUserEmail: reportedUserEmail,
+                                message: messageData['text'],
+                              ),
+                        ),
+                      );
+                    }
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.cancel),
                 title: const Text('Cancel'),
