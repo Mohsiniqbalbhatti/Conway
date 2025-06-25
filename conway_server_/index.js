@@ -751,7 +751,7 @@ mongoose
     app.use("/api/user", userRoutes); // Use the new user routes
     app.use("/api", reportRoutes); // Register report routes
 
-    server.listen(config.PORT, "0.0.0.0", () => {
+    server.listen(3001, "0.0.0.0", () => {
       console.log(`Server is running on port ${config.PORT}`);
     });
 
